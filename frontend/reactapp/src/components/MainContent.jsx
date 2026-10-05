@@ -19,8 +19,13 @@ export const MainContent = ({
   loadingProjects,
   setShowEditProjectModal,
   setShowCreateProjectModal,
-  openProject
+  openProject,
+  myUserId
 }) => {
+  // Only the owner of the selected class may manage its projects.
+  const ownsSelectedGroup =
+    !!myUserId && String(selectedGroup?.owner_id) === String(myUserId);
+
   const handleSelectGroup = (group) => {
     setSelectedGroup(group);
     if (group) {
@@ -75,6 +80,7 @@ export const MainContent = ({
         onLeaveGroup={handleLeaveGroup}
         onCreateGroup={() => setShowCreateGroupModal(true)}
         onJoinGroup={() => setShowJoinGroupModal(true)}
+        myUserId={myUserId}
       />
 
       <ProjectsList
@@ -87,6 +93,7 @@ export const MainContent = ({
         onCreateProject={() => setShowCreateProjectModal(true)}
         groups={groups}
         onSelectGroup={handleSelectGroup}
+        canManage={ownsSelectedGroup}
       />
     </div>
   );

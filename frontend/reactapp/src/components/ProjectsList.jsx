@@ -4,7 +4,7 @@ import { FolderPlus, Edit2, Trash2, Code2, Folder, ArrowRight, History, Users, X
 import api from "../../axiosConfig";
 import SearchBar from "./SearchBar";
 
-const ProjectItem = ({ project, onEdit, onDelete, onOpen }) => {
+const ProjectItem = ({ project, onEdit, onDelete, onOpen, canManage }) => {
   const activeCount = project.active_users || 0;
 
   const handleDeleteClick = (e) => {
@@ -47,6 +47,7 @@ const ProjectItem = ({ project, onEdit, onDelete, onOpen }) => {
           )}
         </div>
 
+        {canManage && (
         <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity absolute top-3 right-3 bg-gray-900/80 backdrop-blur-md rounded-lg p-1 border border-gray-500/20 z-20">
           <button
             onClick={(e) => { e.stopPropagation(); onEdit(project); }}
@@ -66,6 +67,7 @@ const ProjectItem = ({ project, onEdit, onDelete, onOpen }) => {
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         </div>
+        )}
       </div>
 
       <div className="flex justify-between items-end border-t border-gray-600/20 pt-2 mt-auto">
@@ -96,7 +98,8 @@ export const ProjectsList = ({
   onOpenProject,
   onCreateProject,
   groups,
-  onSelectGroup
+  onSelectGroup,
+  canManage = false
 }) => {
   const navigate = useNavigate();
   const [lastSession, setLastSession] = useState(null);
@@ -292,13 +295,15 @@ export const ProjectsList = ({
                 onEscape={() => setSearchQuery("")}
               />
             </div>
-            <button
-              onClick={onCreateProject}
-              className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-500 transition-all duration-200 shadow-lg shadow-blue-500/20 hover:shadow-blue-500/30 font-medium whitespace-nowrap w-full sm:w-auto"
-            >
-              <FolderPlus className="h-4 w-4" />
-              <span className="text-sm">Create Project</span>
-            </button>
+            {canManage && (
+              <button
+                onClick={onCreateProject}
+                className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-500 transition-all duration-200 shadow-lg shadow-blue-500/20 hover:shadow-blue-500/30 font-medium whitespace-nowrap w-full sm:w-auto"
+              >
+                <FolderPlus className="h-4 w-4" />
+                <span className="text-sm">Create Project</span>
+              </button>
+            )}
           </div>
         </div>
         <div className="h-px bg-gray-600"></div>
@@ -327,6 +332,7 @@ export const ProjectsList = ({
                 onEdit={onEditProject}
                 onDelete={onDeleteProject}
                 onOpen={onOpenProject}
+                canManage={canManage}
               />
             ))}
           </ul>

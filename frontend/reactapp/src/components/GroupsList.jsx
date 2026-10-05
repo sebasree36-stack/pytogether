@@ -14,7 +14,8 @@ export const GroupsList = ({
   onViewAccessCode,
   onLeaveGroup,
   onCreateGroup,
-  onJoinGroup
+  onJoinGroup,
+  myUserId
 }) => {
   const navigate = useNavigate();
   const [isMobile, setIsMobile] = useState(false);
@@ -126,6 +127,7 @@ export const GroupsList = ({
                         onViewAccessCode={() => onViewAccessCode(group)}
                         onViewMembers={() => onViewMembers(group)}
                         onLeave={() => onLeaveGroup(group)}
+                        isOwner={String(group.owner_id) === String(myUserId)}
                         isMobile={true}
                       />
                     ))
@@ -215,6 +217,7 @@ export const GroupsList = ({
                   onViewAccessCode={() => onViewAccessCode(group)}
                   onViewMembers={() => onViewMembers(group)}
                   onLeave={() => onLeaveGroup(group)}
+                  isOwner={String(group.owner_id) === String(myUserId)}
                   isMobile={false}
                 />
               ))
@@ -235,6 +238,7 @@ const GroupItem = ({
   onViewAccessCode,
   onViewMembers,
   onLeave,
+  isOwner = false,
   isMobile = false
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -270,14 +274,16 @@ const GroupItem = ({
             ? (isExpanded ? 'max-h-20 opacity-100' : 'max-h-0 opacity-0 overflow-hidden')
             : 'max-h-0 opacity-0 overflow-hidden group-hover:max-h-20 group-hover:opacity-100'
           }`}>
-          <button
-            onClick={onEdit}
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 md:px-3 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 hover:text-blue-200 rounded-lg transition-all duration-200 text-xs font-medium"
-            title="Edit Group"
-          >
-            <Edit2 className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Edit</span>
-          </button>
+          {isOwner && (
+            <button
+              onClick={onEdit}
+              className="flex-1 flex items-center justify-center gap-1.5 px-2 md:px-3 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 hover:text-blue-200 rounded-lg transition-all duration-200 text-xs font-medium"
+              title="Edit Group"
+            >
+              <Edit2 className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Edit</span>
+            </button>
+          )}
           <button
             onClick={onViewAccessCode}
             className="flex-1 flex items-center justify-center gap-1.5 px-2 md:px-3 py-2 bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 hover:text-orange-200 rounded-lg transition-all duration-200 text-xs font-medium"

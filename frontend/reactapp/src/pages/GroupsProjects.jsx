@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import api from "../../axiosConfig";
 import { useNavigate } from "react-router-dom";
+import { jwtDecode } from "jwt-decode";
 import { LogOut, Coffee, Github, Mail, Search, Folder, ArrowRight, X } from "lucide-react";
 import { MainContent } from "../components/MainContent";
 
@@ -54,6 +55,12 @@ export default function GroupsAndProjectsPage() {
     const { instance } = useMsal();
 
     document.title = 'PyTogether';
+
+    // Managing a class belongs to its owner, so the actions that only the
+    // owner may take are hidden from everyone else. The server enforces this
+    // regardless; hiding them just stops members clicking buttons that fail.
+    const accessToken = sessionStorage.getItem("access_token");
+    const myUserId = accessToken ? String(jwtDecode(accessToken).user_id) : null;
 
     // Prefer what the server said over a generic line: it is the only place
     // that knows why an action was refused.
@@ -466,6 +473,7 @@ export default function GroupsAndProjectsPage() {
                     setShowEditProjectModal={setShowEditProjectModal}
                     setShowCreateProjectModal={setShowCreateProjectModal}
                     openProject={openProject}
+                    myUserId={myUserId}
                 />
             </div>
 
