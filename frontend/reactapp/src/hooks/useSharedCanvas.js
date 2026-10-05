@@ -1,9 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import * as Y from 'yjs';
 
-export function useSharedCanvas(ydocRef, isConnected, isSynced) {
+export function useSharedCanvas(ydocRef, isConnected, isSynced, myUserId, myColor, isTeacher = false) {
   const [drawingMode, setDrawingMode] = useState('none');
   const [drawColor, setDrawColor] = useState('#EF4444');
+
+  // A pupil always draws in the colour the room gave them, so the board says
+  // who wrote what without anybody having to ask. Only the teacher picks.
+  const inkColor = isTeacher ? drawColor : (myColor || '#EF4444');
+
+  // Every stroke is signed, which is what lets the server allow a pupil to rub
+  // out their own marks and nobody else's.
+  const author = myUserId !== undefined && myUserId !== null ? String(myUserId) : undefined;
   const [showDrawings, setShowDrawings] = useState(true);
   const [drawings, setDrawings] = useState([]);
 
@@ -100,13 +108,13 @@ export function useSharedCanvas(ydocRef, isConnected, isSynced) {
         ctx.lineWidth = drawingMode === 'erase' ? 20 : drawingMode === 'highlight' ? 20 : 2;
         if (drawingMode === 'erase') ctx.strokeStyle = '#000000';
         else if (drawingMode === 'highlight') ctx.strokeStyle = 'rgba(255, 255, 0, 0.15)';
-        else ctx.strokeStyle = drawColor;
+        else ctx.strokeStyle = inkColor;
         ctx.globalCompositeOperation = 'source-over';
         ctx.stroke();
         ctx.closePath();
       }
     }
-  }, [drawings, showDrawings, drawingMode, drawColor]);
+  }, [drawings, showDrawings, drawingMode, inkColor]);
 
   useEffect(() => {
   if (!isSynced) return;
@@ -196,7 +204,7 @@ export function useSharedCanvas(ydocRef, isConnected, isSynced) {
     ctx.lineWidth = drawingMode === 'erase' ? 20 : 2;
     if(drawingMode === 'highlight') { ctx.lineWidth = 20; ctx.strokeStyle = 'rgba(255, 255, 0, 0.15)'; }
     else if(drawingMode === 'erase') { ctx.strokeStyle = '#000000'; }
-    else { ctx.strokeStyle = drawColor; }
+    else { ctx.strokeStyle = inkColor; }
     ctx.globalCompositeOperation = 'source-over';
 
     // Flush partial stroke to Y.js every 300ms so other users see it live
@@ -205,14 +213,15 @@ export function useSharedCanvas(ydocRef, isConnected, isSynced) {
       if (currentPathRef.current.length < 2 || !ydrawings) return;
 
       let width = 2;
-      let color = drawColor;
+      let color = inkColor;
       if (drawingMode === 'erase') width = 20;
       if (drawingMode === 'highlight') { width = 20; color = 'rgba(255, 255, 0, 0.15)'; }
 
       const partialPath = {
         type: drawingMode, color, width,
         points: [...currentPathRef.current],
-        _liveId: liveStrokeIdRef.current
+        _liveId: liveStrokeIdRef.current,
+        ...(author ? { author } : {})
       };
 
       ydrawings.doc.transact(() => {
@@ -252,11 +261,11 @@ export function useSharedCanvas(ydocRef, isConnected, isSynced) {
     }
     
     let width = 2;
-    let color = drawColor;
+    let color = inkColor;
     if(drawingMode === 'erase') width = 20;
     if(drawingMode === 'highlight') { width = 20; color = 'rgba(255, 255, 0, 0.15)'; }
 
-    const newPath = { type: drawingMode, color, width, points: currentPathRef.current };
+    const newPath = { type: drawingMode, color, width, points: currentPathRef.current, ...(author ? { author } : {}) };
     const ydrawings = ydrawingsRef.current;
     if (ydrawings) {
       // Remove live stroke preview (untracked by undo manager)
@@ -275,7 +284,24 @@ export function useSharedCanvas(ydocRef, isConnected, isSynced) {
     liveStrokeIdRef.current = null;
   };
 
-  const clearDrawings = () => ydrawingsRef.current?.delete(0, ydrawingsRef.current.length);
+  // The teacher clears the board. A pupil clears their own marks and leaves
+  // everybody else's where they are, which the server insists on anyway. An
+  // unsigned stroke predates the signing and counts as the teacher's.
+  const clearDrawings = () => {
+    const ydrawings = ydrawingsRef.current;
+    if (!ydrawings) return;
+
+    if (isTeacher) {
+      ydrawings.delete(0, ydrawings.length);
+      return;
+    }
+
+    ydrawings.doc.transact(() => {
+      for (let i = ydrawings.length - 1; i >= 0; i--) {
+        if (ydrawings.get(i)?.author === author) ydrawings.delete(i, 1);
+      }
+    });
+  };
   const undo = () => drawingUndoManagerRef.current?.undo();
   const redo = () => drawingUndoManagerRef.current?.redo();
 
@@ -286,6 +312,7 @@ export function useSharedCanvas(ydocRef, isConnected, isSynced) {
     setDrawingMode,
     drawColor,
     setDrawColor,
+    inkColor,
     showDrawings,
     setShowDrawings,
     clearDrawings,

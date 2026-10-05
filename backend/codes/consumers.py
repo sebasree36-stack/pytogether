@@ -2,6 +2,7 @@ import json
 import base64
 import asyncio
 import math
+from collections import Counter
 import y_py as Y
 from urllib.parse import parse_qs
 
@@ -24,7 +25,7 @@ User = get_user_model()
 # one pupil's browser console and everybody else's screen, so a stroke that does
 # not fit this shape is refused rather than stored and handed on.
 STROKE_TYPES = {"draw", "highlight", "erase"}
-STROKE_KEYS = {"type", "color", "width", "points", "_liveId"}
+STROKE_KEYS = {"type", "color", "width", "points", "_liveId", "author"}
 MAX_STROKES = 500
 MAX_POINTS_PER_STROKE = 2000
 
@@ -65,6 +66,10 @@ def _stroke_problem(stroke):
     live_id = stroke.get("_liveId")
     if live_id is not None and (not isinstance(live_id, str) or len(live_id) > 64):
         return "a live stroke id is not a short string"
+
+    author = stroke.get("author")
+    if author is not None and (not isinstance(author, str) or len(author) > 32):
+        return "a stroke author is not a short string"
 
     return None
 
@@ -522,20 +527,53 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
         if after["drawings"] != before["drawings"]:
             if not self.permissions["can_draw"]:
                 return "you cannot draw right now"
+            return self._drawing_refusal(
+                json.loads(before["drawings"]),
+                json.loads(after["drawings"]),
+            )
 
-            strokes = json.loads(after["drawings"])
-            if len(strokes) > MAX_STROKES:
-                return "there are too many strokes on the board"
+        return None
 
-            # Only what this update added needs checking. Whatever was already
-            # stored was checked on the way in.
-            was_there = set(json.dumps(s, sort_keys=True) for s in json.loads(before["drawings"]))
-            for stroke in strokes:
-                if json.dumps(stroke, sort_keys=True) in was_there:
-                    continue
-                problem = _stroke_problem(stroke)
-                if problem:
-                    return problem
+    def _drawing_refusal(self, old_strokes, new_strokes):
+        """Why this change to the board is not this user's to make."""
+        if len(new_strokes) > MAX_STROKES:
+            return "there are too many strokes on the board"
+
+        mine = str(self.user.pk)
+
+        # Counted, not just compared as sets: two identical strokes are a real
+        # possibility, and treating them as one let a pupil slip a copy of the
+        # teacher's stroke past the signature check by matching it exactly.
+        def counted(strokes):
+            return Counter(json.dumps(s, sort_keys=True) for s in strokes)
+
+        old = counted(old_strokes)
+        new = counted(new_strokes)
+
+        # Rubbing out. A stroke with no author predates the signing and counts
+        # as the teacher's, so a pupil cannot clear the board by claiming the
+        # unsigned marks on it.
+        if not self.is_teacher:
+            for gone in (old - new):
+                if json.loads(gone).get("author") != mine:
+                    return "you can only rub out your own drawing"
+
+        # Adding. What was already stored was checked when it arrived, so only
+        # the new marks are inspected.
+        for added in (new - old):
+            stroke = json.loads(added)
+
+            problem = _stroke_problem(stroke)
+            if problem:
+                return problem
+
+            if stroke.get("author") != mine:
+                return "a drawing cannot be signed with somebody else's name"
+
+            # The rubber works by covering what is underneath, other people's
+            # marks included, so it stays with the teacher.
+            if stroke["type"] == "erase" and not self.is_teacher:
+                return "you cannot use the rubber"
 
         return None
 

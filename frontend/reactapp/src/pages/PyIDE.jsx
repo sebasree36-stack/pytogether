@@ -62,6 +62,8 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
   const [code, setCode] = useState('# Loading code...\n# If this message stays for more than 10 seconds, please refresh the page.');
   const [isConnected, setIsConnected] = useState(false);
   const [connectedUsers, setConnectedUsers] = useState([]);
+  // The colour this room handed out, which is also the ink this user draws in
+  const [myColor, setMyColor] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState("");
   const [isEditingName, setIsEditingName] = useState(false);
@@ -171,7 +173,7 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
   // CUSTOM HOOKS
   const runner = usePyRunner();
   const voice = useVoiceChat(wsRef, myUserId);
-  const canvas = useSharedCanvas(ydocRef, isConnected, isSynced);
+  const canvas = useSharedCanvas(ydocRef, isConnected, isSynced, myUserId, myColor, permissions.is_teacher);
 
   // Global error boundary for CodeMirror crashes
   useEffect(() => {
@@ -387,6 +389,7 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
           case 'connection':
             if (data.users) {
               const me = data.users.find(u => u.id === myUserId);
+              if (me) setMyColor(me.color);
               if (me) awareness.setLocalStateField("user", {
                 id: me.id,
                 name: me.name || 'Invitado',
@@ -892,11 +895,27 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
   const drawingSlot = (
     <div className="flex items-center space-x-1 p-1 bg-gray-700 rounded-lg">
       <div className={`flex items-center space-x-1 ${!permissions.can_draw ? 'hidden' : ''} ${!canvas.showDrawings ? 'opacity-40 pointer-events-none' : ''}`}>
-        <input type="color" value={canvas.drawColor} onChange={e => canvas.setDrawColor(e.target.value)} className="w-9 h-9 p-1 bg-transparent border-none cursor-pointer hover:bg-gray-600 rounded transition-colors" />
-        <button onClick={() => canvas.setDrawingMode(m => m === 'draw' ? 'none' : 'draw')} className={`p-2 rounded ${canvas.drawingMode === 'draw' ? 'bg-blue-500 text-white' : 'hover:bg-gray-600'}`}><Pencil className="h-4 w-4" /></button>
-        <button onClick={() => canvas.setDrawingMode(m => m === 'highlight' ? 'none' : 'highlight')} className={`p-2 rounded ${canvas.drawingMode === 'highlight' ? 'bg-blue-500 text-white' : 'hover:bg-gray-600'}`}><Highlighter className="h-4 w-4" /></button>
-        <button onClick={() => canvas.setDrawingMode(m => m === 'erase' ? 'none' : 'erase')} className={`p-2 rounded ${canvas.drawingMode === 'erase' ? 'bg-blue-500 text-white' : 'hover:bg-gray-600'}`}><Eraser className="h-4 w-4" /></button>
-        <button onClick={() => window.confirm('Clear all drawings for everyone?') && canvas.clearDrawings()} className="p-2 hover:bg-red-500/50 rounded text-red-400"><Trash2 className="h-4 w-4" /></button>
+        {permissions.is_teacher ? (
+          <input type="color" value={canvas.drawColor} onChange={e => canvas.setDrawColor(e.target.value)} className="w-9 h-9 p-1 bg-transparent border-none cursor-pointer hover:bg-gray-600 rounded transition-colors" title="Pen colour" />
+        ) : (
+          /* A pupil draws in the colour the room gave them, so there is nothing
+             to choose. Showing it means they recognise their own marks. */
+          <div className="w-7 h-7 m-1 rounded-full border-2 border-gray-500" style={{ backgroundColor: canvas.inkColor }} title="Your colour" />
+        )}
+        <button onClick={() => canvas.setDrawingMode(m => m === 'draw' ? 'none' : 'draw')} className={`p-2 rounded ${canvas.drawingMode === 'draw' ? 'bg-blue-500 text-white' : 'hover:bg-gray-600'}`} title="Pen"><Pencil className="h-4 w-4" /></button>
+        <button onClick={() => canvas.setDrawingMode(m => m === 'highlight' ? 'none' : 'highlight')} className={`p-2 rounded ${canvas.drawingMode === 'highlight' ? 'bg-blue-500 text-white' : 'hover:bg-gray-600'}`} title="Highlighter"><Highlighter className="h-4 w-4" /></button>
+        {/* The rubber covers whatever is under it, other people's marks
+            included, so it stays with the teacher. */}
+        {permissions.is_teacher && (
+          <button onClick={() => canvas.setDrawingMode(m => m === 'erase' ? 'none' : 'erase')} className={`p-2 rounded ${canvas.drawingMode === 'erase' ? 'bg-blue-500 text-white' : 'hover:bg-gray-600'}`} title="Rubber"><Eraser className="h-4 w-4" /></button>
+        )}
+        <button
+          onClick={() => window.confirm(permissions.is_teacher ? 'Clear the board for everyone?' : 'Clear your own drawings?') && canvas.clearDrawings()}
+          className="p-2 hover:bg-red-500/50 rounded text-red-400"
+          title={permissions.is_teacher ? 'Clear the board' : 'Clear your own drawings'}
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
       </div>
       <button onClick={() => { if (canvas.showDrawings) canvas.setDrawingMode('none'); canvas.setShowDrawings(!canvas.showDrawings); }} className="p-2 hover:bg-gray-600 rounded">{canvas.showDrawings ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button>
     </div>
