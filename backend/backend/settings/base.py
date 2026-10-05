@@ -130,6 +130,8 @@ REST_FRAMEWORK = {
     'DEFAULT_THROTTLE_RATES': {
         'user': '100/minute',
         'anon': '20/minute',
+        # Sized for a class arriving at once on /unirse, not for one person
+        'join_class': '120/minute',
     }
 }
 

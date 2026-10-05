@@ -1,12 +1,69 @@
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework import status
+from rest_framework_simplejwt.tokens import RefreshToken
 from .models import Group
+from .guests import clean_name, create_guest, unique_name_in_class
 from .serializers import GroupCreateSerializer, GroupDetailSerializer, GroupJoinSerializer, GroupUpdateSerializer
 from utils.permissions import guest_forbidden, owner_required
 from datetime import timedelta
+from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
+
+
+class JoinClassThrottle(AnonRateThrottle):
+    """A whole class signs in within the same minute, often through one school
+    router that makes them share an address. The global 20/minute anon limit
+    would lock half of them out, so this route gets a classroom-sized one."""
+
+    scope = "join_class"
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+@throttle_classes([JoinClassThrottle])
+def join_as_guest(request):
+    """ View for a child to enter a class with a code and a name, no email """
+
+    code = (request.data.get("access_code") or "").strip().upper()
+    name = clean_name(request.data.get("name"))
+
+    if not name:
+        return Response({"error": "A name is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        # The row stays locked across the numbering and the creation, so two
+        # children typing the same name at the same moment cannot both end up
+        # as "Juan" after each read a list that did not yet hold the other.
+        with transaction.atomic():
+            group = Group.objects.select_for_update().get(access_code=code)
+            guest = create_guest(group, unique_name_in_class(group, name))
+    except Group.DoesNotExist:
+        return Response({"error": "Invalid class code."}, status=status.HTTP_404_NOT_FOUND)
+
+    refresh = RefreshToken.for_user(guest)
+    response = Response(
+        {
+            "access": str(refresh.access_token),
+            "name": guest.name,
+            "group_id": group.id,
+            "group_name": group.group_name,
+        },
+        status=status.HTTP_201_CREATED,
+    )
+    response.set_cookie(
+        key="refresh_token",
+        value=str(refresh),
+        httponly=True,
+        secure=settings.SESSION_COOKIE_SECURE,
+        samesite="Lax",
+        max_age=30 * 24 * 60 * 60,
+        path="/",
+    )
+    return response
 
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])

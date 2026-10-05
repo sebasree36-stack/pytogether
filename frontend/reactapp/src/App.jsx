@@ -13,6 +13,7 @@ import PrivacyPolicy from './pages/PrivacyPolicy';
 import OfflinePlayground from './pages/OfflinePlayground';
 import EmbedPlayground from './pages/EmbedPlayground';
 import SharedProjectHandler from './components/SharedProjectHandler';
+import JoinClass from './pages/JoinClass';
 
 
 function App() {
@@ -104,6 +105,10 @@ function App() {
           <OfflinePlayground />
         }
         />
+
+        {/* Where the teacher's link lands. Deliberately not a PublicRoute: a
+            child who already entered must still reach it to carry on. */}
+        <Route path="/unirse" element={<JoinClass />} />
 
         <Route path="/snippet/:token" element={<OfflinePlayground />} />
         <Route path="/embed/:token" element={<EmbedPlayground />} />
