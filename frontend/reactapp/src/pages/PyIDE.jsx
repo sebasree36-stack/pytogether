@@ -4,7 +4,7 @@ import { jwtDecode } from "jwt-decode";
 import { saveAs } from 'file-saver';
 import { jsPDF } from "jspdf";
 import { Document, Packer, Paragraph, TextRun } from 'docx';
-import { Send, Check, X, Edit2, Pencil, Highlighter, Eraser, Eye, EyeOff, Trash2, Wifi, Share2, GraduationCap, RotateCcw, RotateCw } from "lucide-react";
+import { Send, Check, X, Edit2, Pencil, Highlighter, Eraser, Eye, EyeOff, Trash2, Wifi, Share2, GraduationCap, Lock, RotateCcw, RotateCw } from "lucide-react";
 import Anser from "anser";
 
 // CodeMirror
@@ -83,6 +83,7 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
   const [showSizeWarning, setShowSizeWarning] = useState(false);
   const [isSynced, setIsSynced] = useState(false);
   const [pendingDeletion, setPendingDeletion] = useState(null);
+  const [refusalNotice, setRefusalNotice] = useState("");
 
   const deletionWarningFilter = EditorState.transactionFilter.of(tr => {
     const userEvent = tr.annotation(Transaction.userEvent);
@@ -405,6 +406,13 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
             });
             break;
 
+          case 'refused':
+            // The controls for anything refused are already hidden, so this
+            // only happens to a client whose view of its permissions is a
+            // moment out of date. Saying so beats a button that does nothing.
+            setRefusalNotice(data.reason || "Your teacher has paused that.");
+            break;
+
           case 'chat_message':
             // Convert to string to ensure safe comparison between ints and strings
             const isMe = String(data.user_id) === String(myUserId);
@@ -547,6 +555,7 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
         if (canvas.drawingMode !== 'none') {
           e.preventDefault();
           e.stopPropagation();
+          if (!permissions.can_draw) return;
           if (isRedo) {
             canvas.redo();
           } else {
@@ -557,6 +566,10 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
         else {
           e.preventDefault();
           e.stopPropagation();
+          // An undo is still an edit. Letting it through while typing is
+          // locked would have the server refuse it and cost this pupil a
+          // reload for pressing a key that looks harmless.
+          if (!permissions.can_code) return;
           if (isRedo) {
             codeUndoManagerRef.current?.redo();
           } else {
@@ -567,7 +580,19 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
     };
     window.addEventListener('keydown', handleKey, { capture: true });
     return () => window.removeEventListener('keydown', handleKey, { capture: true });
-  }, [canvas.drawingMode]);
+  }, [canvas.drawingMode, permissions.can_code, permissions.can_draw]);
+
+  useEffect(() => {
+    if (!refusalNotice) return;
+    const timer = setTimeout(() => setRefusalNotice(""), 5000);
+    return () => clearTimeout(timer);
+  }, [refusalNotice]);
+
+  // Putting the pen away for somebody whose teacher just took drawing off
+  // them, so the canvas stops swallowing their clicks.
+  useEffect(() => {
+    if (!permissions.can_draw) canvas.setDrawingMode('none');
+  }, [permissions.can_draw, canvas.setDrawingMode]);
 
   // Error Line Decoration
   useEffect(() => {
@@ -699,11 +724,20 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
         </div>
       ) : isConnected && isSynced && ytextRef.current && awarenessRef.current ? (
         <>
+          {!permissions.can_code && (
+            <div className="absolute top-0 left-0 right-0 z-20 bg-amber-900/90 border-b border-amber-600 px-4 py-1.5 flex items-center justify-center gap-2">
+              <Lock className="h-3.5 w-3.5 text-amber-300 flex-shrink-0" />
+              <span className="text-xs text-amber-100">
+                Your teacher has paused typing. You can still read and run the code.
+              </span>
+            </div>
+          )}
           <CodeMirror
             height="100%"
             className="h-full text-sm"
             value={ytextRef.current.toString()}
             theme={oneDark}
+            editable={permissions.can_code}
             extensions={[
               python(),
               yCollab(ytextRef.current, awarenessRef.current, { undoManager: codeUndoManagerRef.current }),
@@ -832,7 +866,12 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
     </>
   );
 
-  const chatInputSlot = (
+  const chatInputSlot = !permissions.can_chat ? (
+    <div className="border-t border-gray-700 bg-gray-800 p-3 mt-auto flex items-center justify-center gap-2">
+      <Lock className="h-3.5 w-3.5 text-gray-500 flex-shrink-0" />
+      <span className="text-xs text-gray-400">Your teacher has paused the chat.</span>
+    </div>
+  ) : (
     <div className="border-t border-gray-700 bg-gray-800 p-3 mt-auto">
       <div className="flex items-center space-x-2">
         <input value={chatInput} onChange={e => setChatInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && sendChat()} className="flex-1 bg-gray-700 text-white px-3 py-2 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Type a message..." maxLength={1000} />
@@ -847,9 +886,12 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
   // in the consumer is left wired up so it can come back as a teacher-only
   // button without rebuilding it.
 
+  // The tools need permission; hiding the drawings does not. A pupil who may
+  // not draw still needs to get the teacher's marks out of the way to read the
+  // line of code underneath them.
   const drawingSlot = (
     <div className="flex items-center space-x-1 p-1 bg-gray-700 rounded-lg">
-      <div className={`flex items-center space-x-1 ${!canvas.showDrawings ? 'opacity-40 pointer-events-none' : ''}`}>
+      <div className={`flex items-center space-x-1 ${!permissions.can_draw ? 'hidden' : ''} ${!canvas.showDrawings ? 'opacity-40 pointer-events-none' : ''}`}>
         <input type="color" value={canvas.drawColor} onChange={e => canvas.setDrawColor(e.target.value)} className="w-9 h-9 p-1 bg-transparent border-none cursor-pointer hover:bg-gray-600 rounded transition-colors" />
         <button onClick={() => canvas.setDrawingMode(m => m === 'draw' ? 'none' : 'draw')} className={`p-2 rounded ${canvas.drawingMode === 'draw' ? 'bg-blue-500 text-white' : 'hover:bg-gray-600'}`}><Pencil className="h-4 w-4" /></button>
         <button onClick={() => canvas.setDrawingMode(m => m === 'highlight' ? 'none' : 'highlight')} className={`p-2 rounded ${canvas.drawingMode === 'highlight' ? 'bg-blue-500 text-white' : 'hover:bg-gray-600'}`}><Highlighter className="h-4 w-4" /></button>
@@ -883,9 +925,17 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
     </div>
   );
 
+  const refusalToast = refusalNotice && (
+    <div className="fixed bottom-6 right-6 z-50 bg-amber-900/95 border border-amber-500 rounded-lg px-4 py-3 shadow-2xl max-w-sm flex items-start gap-3">
+      <Lock className="h-4 w-4 text-amber-300 flex-shrink-0 mt-0.5" />
+      <p className="text-xs text-amber-100">{refusalNotice}</p>
+    </div>
+  );
+
   return (
     <>
       {sizeWarningToast}
+      {refusalToast}
       <CodeLayout
         headerContent={headerSlot}
         editorContent={editorSlot}
