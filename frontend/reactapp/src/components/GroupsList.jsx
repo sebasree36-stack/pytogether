@@ -15,7 +15,8 @@ export const GroupsList = ({
   onLeaveGroup,
   onCreateGroup,
   onJoinGroup,
-  myUserId
+  myUserId,
+  isGuest = false
 }) => {
   const navigate = useNavigate();
   const [isMobile, setIsMobile] = useState(false);
@@ -71,7 +72,7 @@ export const GroupsList = ({
                 />
               </div>
 
-              <div className="flex gap-2 mb-3">
+              <div className={`flex gap-2 ${isGuest ? 'hidden' : 'mb-3'}`}>
                 <button
                   onClick={() => { onCreateGroup(); setIsOpen(false); }}
                   className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-700 hover:bg-blue-600 text-white rounded-lg transition-all duration-200 font-medium text-sm"
@@ -128,6 +129,7 @@ export const GroupsList = ({
                         onViewMembers={() => onViewMembers(group)}
                         onLeave={() => onLeaveGroup(group)}
                         isOwner={String(group.owner_id) === String(myUserId)}
+                        isGuest={isGuest}
                         isMobile={true}
                       />
                     ))
@@ -156,7 +158,7 @@ export const GroupsList = ({
           />
         </div>
 
-        <div className="flex gap-3 pb-3 border-b-0 border-gray-700">
+        <div className={`gap-3 pb-3 border-b-0 border-gray-700 ${isGuest ? 'hidden' : 'flex'}`}>
           <button
             onClick={onCreateGroup}
             className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-700/100 hover:bg-blue-600 text-white rounded-xl transition-all duration-200 font-medium"
@@ -218,6 +220,7 @@ export const GroupsList = ({
                   onViewMembers={() => onViewMembers(group)}
                   onLeave={() => onLeaveGroup(group)}
                   isOwner={String(group.owner_id) === String(myUserId)}
+                  isGuest={isGuest}
                   isMobile={false}
                 />
               ))
@@ -239,6 +242,7 @@ const GroupItem = ({
   onViewMembers,
   onLeave,
   isOwner = false,
+  isGuest = false,
   isMobile = false
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -284,14 +288,18 @@ const GroupItem = ({
               <span className="hidden sm:inline">Edit</span>
             </button>
           )}
-          <button
-            onClick={onViewAccessCode}
-            className="flex-1 flex items-center justify-center gap-1.5 px-2 md:px-3 py-2 bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 hover:text-orange-200 rounded-lg transition-all duration-200 text-xs font-medium"
-            title="View Access Code"
-          >
-            <Key className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Key</span>
-          </button>
+          {/* The code lets anyone into the class, so only its teacher sees it.
+              The server withholds it from everyone else regardless. */}
+          {isOwner && (
+            <button
+              onClick={onViewAccessCode}
+              className="flex-1 flex items-center justify-center gap-1.5 px-2 md:px-3 py-2 bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 hover:text-orange-200 rounded-lg transition-all duration-200 text-xs font-medium"
+              title="View Access Code"
+            >
+              <Key className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Key</span>
+            </button>
+          )}
           <button
             onClick={onViewMembers}
             className="flex-1 flex items-center justify-center gap-1.5 px-2 md:px-3 py-2 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 hover:text-purple-200 rounded-lg transition-all duration-200 text-xs font-medium"
@@ -309,13 +317,17 @@ const GroupItem = ({
               </>
             )}
           </button>
-          <button
-            onClick={onLeave}
-            className="px-2 md:px-3 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 hover:text-red-200 rounded-lg transition-all duration-200"
-            title="Leave Group"
-          >
-            <DoorOpen className="h-3.5 w-3.5" />
-          </button>
+          {/* A guest who left would be stranded: nothing but the teacher's
+              link can put them back in, and it would make them a new pupil. */}
+          {!isGuest && (
+            <button
+              onClick={onLeave}
+              className="px-2 md:px-3 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 hover:text-red-200 rounded-lg transition-all duration-200"
+              title="Leave Group"
+            >
+              <DoorOpen className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </div>
 

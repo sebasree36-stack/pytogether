@@ -25,10 +25,23 @@ class GroupDetailSerializer(serializers.ModelSerializer):
     owner = serializers.ReadOnlyField(source="owner.name")
     owner_id = serializers.ReadOnlyField(source="owner.id")
     group_members = GroupMemberSerializer(many=True, read_only=True)
+    access_code = serializers.SerializerMethodField()
 
     class Meta:
         model = Group
         fields = ["id", "group_name", "access_code", "owner", "owner_id", "group_members"]
+
+    def get_access_code(self, group):
+        """The code lets anyone into the class, so it belongs to the teacher.
+
+        A pupil who could read it off their own screen could hand the lesson to
+        the rest of the school, so hiding the button was never going to be
+        enough: the code does not leave the server for anyone but the owner.
+        """
+        request = self.context.get("request")
+        if request and group.owner_id == request.user.id:
+            return group.access_code
+        return None
 
 class GroupJoinSerializer(serializers.Serializer):
     access_code = serializers.CharField()

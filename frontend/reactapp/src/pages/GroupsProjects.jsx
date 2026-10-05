@@ -62,6 +62,17 @@ export default function GroupsAndProjectsPage() {
     const accessToken = sessionStorage.getItem("access_token");
     const myUserId = accessToken ? String(jwtDecode(accessToken).user_id) : null;
 
+    // A guest belongs to the one class they were let into. Creating classes,
+    // joining others and walking out of their own are all refused by the
+    // server, so the buttons for them are not shown either.
+    const [isGuest, setIsGuest] = useState(false);
+
+    useEffect(() => {
+        api.get("/api/me/")
+            .then(res => setIsGuest(!!res.data.is_guest))
+            .catch(err => console.error("Could not read the current user", err));
+    }, []);
+
     // Prefer what the server said over a generic line: it is the only place
     // that knows why an action was refused.
     const showActionError = (err, fallback) => {
@@ -474,6 +485,7 @@ export default function GroupsAndProjectsPage() {
                     setShowCreateProjectModal={setShowCreateProjectModal}
                     openProject={openProject}
                     myUserId={myUserId}
+                    isGuest={isGuest}
                 />
             </div>
 

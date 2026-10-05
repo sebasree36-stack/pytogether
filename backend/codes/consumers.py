@@ -12,6 +12,8 @@ from channels.db import database_sync_to_async
 from y_py import YDoc, apply_update
 
 from projects.models import Project
+from usergroups.models import Group, permissions_for
+from usergroups.broadcast import class_channel_group
 from utils.redis_helpers import ydoc_key, active_set_key, voice_room_key, user_profile_key, room_colors_key, ACTIVE_PROJECTS_SET, DIRTY_PROJECTS_SET, ASYNC_REDIS
 from utils.daily_logger import track_project_opened_async, track_max_room_async, track_max_active_rooms_async, track_ws_connection_async, track_user_async
 
@@ -30,6 +32,11 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
         self.project_id = int(self.scope["url_route"]["kwargs"]["project_id"])
         self.room = f"project_room_g{self.group_id}_p{self.project_id}"
         self.forced_disconnect = False
+
+        # Locked until the real ones are loaded below. A message that arrives
+        # in the gap after accept() is refused rather than crashing on a
+        # missing attribute.
+        self.permissions = {"can_code": False, "can_draw": False, "can_chat": False}
 
         self.user = self.scope.get("user")
 
@@ -55,6 +62,9 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
         # Connection Accepted
         await self.channel_layer.group_add(self.room, self.channel_name)
         await self.channel_layer.group_add("global_connection_group", self.channel_name)
+        # Permissions belong to the class, not to this project, so changes have
+        # to reach rooms the teacher is not looking at
+        await self.channel_layer.group_add(class_channel_group(self.group_id), self.channel_name)
         await self.accept()
         await track_user_async(self.user.pk)
 
@@ -74,6 +84,11 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
         await ASYNC_REDIS.expire(user_profile_key(str(self.user.pk)), 86400)
 
         self.color = await self._claim_room_color()
+
+        # Before anything else the client can act on: a pupil who may not type
+        # should never be shown a live editor, not even for a moment.
+        self.permissions = await self._load_permissions()
+        await self._send_permissions()
 
         # Always, not only on the first tab: a second tab or a quick reload
         # needs the user list too, since that message is what tells a client
@@ -157,10 +172,31 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
 
         await self.channel_layer.group_discard(self.room, self.channel_name)
         await self.channel_layer.group_discard("global_connection_group", self.channel_name)
+        await self.channel_layer.group_discard(class_channel_group(self.group_id), self.channel_name)
 
     async def force_disconnect(self, event):
         self.forced_disconnect = True
         await self.close(code=4000)
+
+    async def permissions_changed(self, event):
+        """The teacher changed something; every room of the class reloads its own."""
+        self.permissions = await self._load_permissions()
+        await self._send_permissions()
+
+    async def _send_permissions(self):
+        await self.send_json({
+            "type": "permissions",
+            "is_teacher": self.is_teacher,
+            **self.permissions,
+        })
+
+    @database_sync_to_async
+    def _load_permissions(self):
+        try:
+            group = Group.objects.get(id=self.group_id)
+        except Group.DoesNotExist:
+            return {"can_code": False, "can_draw": False, "can_chat": False}
+        return permissions_for(group, self.user)
 
     async def broadcast_remove_awareness(self, event):
         if event.get("sender") == self.channel_name:
@@ -237,6 +273,10 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
                 })
 
             elif mtype == "chat_message":
+                if not self.permissions["can_chat"]:
+                    await self.send_json({"type": "refused", "action": "chat"})
+                    return
+
                 message = msg.get("message", "").strip()
                 if not message or len(message) > 1000: return
                 

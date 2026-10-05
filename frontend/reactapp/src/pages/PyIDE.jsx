@@ -4,7 +4,7 @@ import { jwtDecode } from "jwt-decode";
 import { saveAs } from 'file-saver';
 import { jsPDF } from "jspdf";
 import { Document, Packer, Paragraph, TextRun } from 'docx';
-import { Send, Check, X, Edit2, Pencil, Highlighter, Eraser, Eye, EyeOff, Trash2, Wifi, Share2, RotateCcw, RotateCw } from "lucide-react";
+import { Send, Check, X, Edit2, Pencil, Highlighter, Eraser, Eye, EyeOff, Trash2, Wifi, Share2, GraduationCap, RotateCcw, RotateCw } from "lucide-react";
 import Anser from "anser";
 
 // CodeMirror
@@ -26,6 +26,7 @@ import api from "../../axiosConfig";
 // Hooks & Components
 import CodeLayout from "../components/CodeLayout";
 import { ShareModal } from "../components/Modals/ShareModal";
+import { ClassPanelModal } from "../components/Modals/ClassPanelModal";
 import { usePyRunner } from "../hooks/usePyRunner";
 import { useVoiceChat } from "../hooks/useVoiceChat";
 import { useSharedCanvas } from "../hooks/useSharedCanvas";
@@ -67,6 +68,17 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
   const [tempName, setTempName] = useState(projectName);
   const [latency, setLatency] = useState(null);
   const [showShareModal, setShowShareModal] = useState(false);
+  const [showClassPanel, setShowClassPanel] = useState(false);
+
+  // What this user may do in this class, as the server sees it. Locked until
+  // the server says otherwise, so a slow connection never shows a child a
+  // working editor they are not meant to have.
+  const [permissions, setPermissions] = useState({
+    is_teacher: false,
+    can_code: false,
+    can_draw: false,
+    can_chat: false,
+  });
   const [editorCrashed, setEditorCrashed] = useState(false);
   const [showSizeWarning, setShowSizeWarning] = useState(false);
   const [isSynced, setIsSynced] = useState(false);
@@ -384,6 +396,15 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
             }
             break;
 
+          case 'permissions':
+            setPermissions({
+              is_teacher: !!data.is_teacher,
+              can_code: !!data.can_code,
+              can_draw: !!data.can_draw,
+              can_chat: !!data.can_chat,
+            });
+            break;
+
           case 'chat_message':
             // Convert to string to ensure safe comparison between ints and strings
             const isMe = String(data.user_id) === String(myUserId);
@@ -617,15 +638,29 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
   ) : (
     <>
       <h2 className="text-lg font-medium text-white truncate">{projectName}</h2>
-      <button onClick={() => { setTempName(projectName); setIsEditingName(true); }} className="p-1 text-gray-400 hover:text-gray-200"><Edit2 className="h-4 w-4" /></button>
-      <button
-        onClick={() => setShowShareModal(true)}
-        className="p-1.5 ml-2 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 rounded-md transition-colors flex items-center gap-1.5"
-        title="Share Project"
-      >
-        <Share2 className="h-3.5 w-3.5" />
-        <span className="text-xs font-medium hidden sm:inline">Share</span>
-      </button>
+      {/* Renaming and sharing are refused by the server for anyone but the
+          owner, and a share link would hand a pupil the whole class. */}
+      {permissions.is_teacher && (
+        <>
+          <button onClick={() => { setTempName(projectName); setIsEditingName(true); }} className="p-1 text-gray-400 hover:text-gray-200"><Edit2 className="h-4 w-4" /></button>
+          <button
+            onClick={() => setShowClassPanel(true)}
+            className="p-1.5 ml-2 bg-green-600/20 hover:bg-green-600/40 text-green-400 rounded-md transition-colors flex items-center gap-1.5"
+            title="Class controls"
+          >
+            <GraduationCap className="h-3.5 w-3.5" />
+            <span className="text-xs font-medium hidden sm:inline">Class</span>
+          </button>
+          <button
+            onClick={() => setShowShareModal(true)}
+            className="p-1.5 bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 rounded-md transition-colors flex items-center gap-1.5"
+            title="Share Project"
+          >
+            <Share2 className="h-3.5 w-3.5" />
+            <span className="text-xs font-medium hidden sm:inline">Share</span>
+          </button>
+        </>
+      )}
     </>
   );
 
@@ -864,6 +899,12 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
         onRun={() => runner.runCode(ytextRef.current ? ytextRef.current.toString() : code)}
         onStop={runner.stopCode}
         onDownloadOption={handleDownload}
+      />
+
+      <ClassPanelModal
+        isOpen={showClassPanel}
+        onClose={() => setShowClassPanel(false)}
+        groupId={groupId}
       />
 
       <ShareModal

@@ -20,7 +20,8 @@ export const MainContent = ({
   setShowEditProjectModal,
   setShowCreateProjectModal,
   openProject,
-  myUserId
+  myUserId,
+  isGuest = false
 }) => {
   // Only the owner of the selected class may manage its projects.
   const ownsSelectedGroup =
@@ -81,6 +82,7 @@ export const MainContent = ({
         onCreateGroup={() => setShowCreateGroupModal(true)}
         onJoinGroup={() => setShowJoinGroupModal(true)}
         myUserId={myUserId}
+        isGuest={isGuest}
       />
 
       <ProjectsList

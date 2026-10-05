@@ -4,7 +4,8 @@ from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
-from .models import Group
+from .models import ClassPermission, Group, permissions_for
+from .broadcast import notify_class_permissions_changed
 from .guests import clean_name, create_guest, unique_name_in_class
 from .serializers import GroupCreateSerializer, GroupDetailSerializer, GroupJoinSerializer, GroupUpdateSerializer
 from utils.permissions import guest_forbidden, owner_required
@@ -88,7 +89,7 @@ def create_group(request):
         group.save()
 
         # Serialize and send back
-        return Response(GroupDetailSerializer(group).data, status=status.HTTP_201_CREATED)
+        return Response(GroupDetailSerializer(group, context={"request": request}).data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(["PUT"])
@@ -107,7 +108,7 @@ def join_group(request):
         group = Group.objects.get(access_code=serializer.validated_data["access_code"])
         group.group_members.add(request.user)
 
-        return Response(GroupDetailSerializer(group).data)
+        return Response(GroupDetailSerializer(group, context={"request": request}).data)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(["GET"])
@@ -125,7 +126,7 @@ def list_groups(request):
 
     groups = Group.objects.filter(group_members=user)
 
-    serializer = GroupDetailSerializer(groups, many=True)
+    serializer = GroupDetailSerializer(groups, many=True, context={"request": request})
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 @api_view(["DELETE"])
@@ -178,3 +179,75 @@ def edit_group(request):
         return Response({"message": "Group updated successfully."}, status=status.HTTP_200_OK)
 
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+PERMISSION_FIELDS = ("can_code", "can_draw", "can_chat")
+
+
+def _class_roster(group):
+    """Every pupil in the class with what they are currently allowed to do.
+
+    The teacher is left out: the owner is never restricted, so a row for them
+    would only be a switch that does nothing.
+    """
+    rows = {p.user_id: p for p in ClassPermission.objects.filter(group=group)}
+
+    roster = []
+    for member in group.group_members.exclude(id=group.owner_id).order_by("display_name", "email"):
+        row = rows.get(member.id)
+        if row is not None:
+            allowed = {f: getattr(row, f) for f in PERMISSION_FIELDS}
+        else:
+            # No row yet: a normal account may do everything, a guest nothing
+            allowed = {f: not member.is_guest for f in PERMISSION_FIELDS}
+
+        roster.append({
+            "id": member.id,
+            "name": member.name,
+            "is_guest": member.is_guest,
+            **allowed,
+        })
+
+    return roster
+
+
+@api_view(["GET", "PUT"])
+@permission_classes([IsAuthenticated])
+def class_permissions(request, group_id):
+    """ View for the teacher to see and change what each pupil may do """
+
+    try:
+        group = Group.objects.get(id=group_id)
+    except Group.DoesNotExist:
+        return Response({"error": "Class not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    denied = owner_required(request.user, group)
+    if denied:
+        return denied
+
+    if request.method == "GET":
+        return Response({"members": _class_roster(group)})
+
+    changes = {f: bool(request.data[f]) for f in PERMISSION_FIELDS if f in request.data}
+    if not changes:
+        return Response({"error": "Nothing to change."}, status=status.HTTP_400_BAD_REQUEST)
+
+    # No user_id means the whole class at once, which is how a lesson usually
+    # goes: everyone writes, then everyone stops and looks at the board.
+    members = group.group_members.exclude(id=group.owner_id)
+    if request.data.get("user_id") is not None:
+        members = members.filter(id=request.data["user_id"])
+        if not members.exists():
+            return Response({"error": "That pupil is not in this class."}, status=status.HTTP_404_NOT_FOUND)
+
+    for member in members:
+        # Seeded from what the member may do now, not from the model defaults,
+        # so flipping one switch cannot silently close the other two.
+        ClassPermission.objects.update_or_create(
+            group=group,
+            user=member,
+            defaults={**permissions_for(group, member), **changes},
+        )
+
+    notify_class_permissions_changed(group.id)
+    return Response({"members": _class_roster(group)})
