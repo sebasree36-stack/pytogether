@@ -38,7 +38,7 @@ Apps Django:
 | App | Modelo | Rol |
 |---|---|---|
 | `users` | `User` (email como login, sin username), `Feedback` | auth, JWT, OAuth Google/Microsoft |
-| `usergroups` | `Group` (owner, miembros M2M, `access_code` aleatorio) | "clases"/equipos |
+| `usergroups` | `Group` (owner, miembros M2M, `access_code` aleatorio), `ClassPermission` | "clases"/equipos y qué puede hacer cada alumno |
 | `projects` | `Project` (pertenece a un Group) | archivos de código |
 | `codes` | `Code` (1-a-1 con Project, campo `content`) | snapshot persistido del código |
 
@@ -47,8 +47,9 @@ Se elige con `DJANGO_SETTINGS_MODULE`. **Para auto-hospedar se usa `selfhost.py`
 
 Rutas HTTP (`backend/backend/urls.py`):
 - `/api/...` → `users.urls` (login `auth/token/`, refresh, register, `me/`, google, microsoft, feedback,
-  validación de links compartidos, snippets públicos)
+  validación de links compartidos, snippets públicos, **`join-class/`**)
 - `/groups/...` → `usergroups.urls`, que anida `/groups/<group_id>/projects/...` → `projects.urls`
+  y **`/groups/<group_id>/permissions/`** (panel del profesor)
 - `/admin/` → admin de Django
 
 Ruta WebSocket (`backend/codes/routing.py`):
@@ -62,15 +63,26 @@ todo lo colaborativo según el campo `type` del mensaje:
 `update` (deltas Yjs del código) · `request_sync` · `awareness` (cursores/selecciones) ·
 `chat_message` · `join_voice` / `leave_voice` / `voice_signal` (señalización WebRTC para la voz) · `ping`
 
+Hacia el cliente, además: `permissions` (al conectar y cada vez que el profesor cambia algo) y
+`refused` (una acción denegada, con el motivo).
+
 Flujo del estado del código:
 1. El cliente manda un delta Yjs en base64 (`update_b64`).
 2. El servidor toma un **lock de Redis** por proyecto, aplica el delta al `YDoc` guardado en Redis
    (`project_ydoc:<id>`), re-serializa y lo guarda. Un delta corrupto provoca `force_disconnect`
    para que ese cliente resincronice.
-3. Marca el proyecto en el set `projects:dirty`.
-4. Hace broadcast del delta al resto del room vía channel layer (Redis).
-5. **Celery beat** corre `codes.tasks.snapshot_dirty_projects` cada `AUTO_SAVE_INTERVAL` segundos:
+3. **Valida el delta contra los permisos de quien lo manda** (`_refusal_reason`): compara el
+   documento antes y después para ver si tocó el código, la pizarra o ambos, y comprueba la forma y
+   la firma de cada trazo nuevo. Si lo rechaza, marca la conexión y la cierra con el código **4010**
+   — solo esa, no la sala — y el cliente recarga esa pestaña.
+4. Marca el proyecto en el set `projects:dirty`.
+5. Hace broadcast del delta al resto del room vía channel layer (Redis), **solo si lo aceptó**.
+6. **Celery beat** corre `codes.tasks.snapshot_dirty_projects` cada `AUTO_SAVE_INTERVAL` segundos:
    saca los proyectos sucios y los persiste a PostgreSQL con `utils/redis_helpers.persist_ydoc_to_db`.
+
+La creación inicial del `YDoc` toma el mismo lock del proyecto y vuelve a comprobar dentro: sin eso,
+una clase entera abriendo el mismo proyecto a la vez genera documentos distintos y quien pierde la
+carrera escribe sobre uno que el servidor nunca vio, así que sus pulsaciones desaparecen sin aviso.
 
 Es decir: **Redis es la fuente de verdad en vivo, PostgreSQL es el respaldo periódico.** Si Redis se
 pierde, se pierde hasta un intervalo de autoguardado de trabajo.
@@ -100,7 +112,8 @@ nadie conectado) · `log_daily_stats_task` · `record_system_resources_task`.
 ### Frontend — React + Vite (`frontend/reactapp/`)
 
 Rutas en `src/App.jsx`. Las importantes:
-`/` (landing `About`) · `/login` · `/register` · `/home` (`GroupsProjects`) ·
+`/` (landing `About`) · `/login` · `/register` · **`/unirse`** (`JoinClass`, entrada de los alumnos
+con `?codigo=XXXXXX`) · `/home` (`GroupsProjects`) ·
 `/groups/:groupId/projects/:projectId` (`PyIDE`, el IDE colaborativo) ·
 `/playground` y `/snippet/:token` (`OfflinePlayground`, sin backend) · `/embed/:token` ·
 `/join-shared/:token`.
@@ -109,6 +122,28 @@ Rutas en `src/App.jsx`. Las importantes:
   CodeMirror (`y-codemirror.next`), chat, voz y dibujo. `src/components/CodeLayout.jsx` es el layout.
 - Hooks en `src/hooks/`: `usePyRunner` (ejecutar Python), `useSharedCanvas` / `useLocalCanvas`
   (dibujo sobre el editor), `useVoiceChat` (`simple-peer`/WebRTC), `useVersionCheck`, `useUmamiHeartbeat`.
+
+## Modo clase
+
+Pensado para que un niño entre sin tener correo y para que el profesor controle la sesión.
+
+- **Entrada del alumno:** el profesor reparte `/unirse?codigo=XXXXXX`. El niño escribe su nombre y
+  `POST /api/join-class/` le crea una cuenta de invitado (`is_guest`) con un correo sintético en
+  `guest.invalid` que nunca se muestra. Los nombres repetidos se numeran ("Juan 2") contra todos los
+  invitados que entraron a ese grupo **ese día**, bajo lock de la fila del grupo.
+- **Permisos:** `ClassPermission(group, user, can_code, can_draw, can_chat)`. Sin fila, una cuenta
+  normal puede todo y un invitado nada, así que una fila que falte nunca da permisos de más. El
+  dueño (el profesor) nunca está restringido. `usergroups.models.permissions_for()` es la única
+  fuente de verdad; el consumer y las vistas la usan.
+- **Cambios en vivo:** cada conexión entra también al channel group `class_g<gid>`
+  (`usergroups/broadcast.py`), así que un cambio del profesor llega a salas que él no está mirando.
+- **El código de clase es del profesor:** `GroupDetailSerializer.get_access_code` solo lo devuelve
+  al dueño. Ocultar el botón no bastaba: el código viajaba en cada respuesta de `/groups/`.
+- **Pizarra:** cada trazo lleva `author`. El alumno dibuja con el color que le dio la sala, sin
+  selector y sin goma (la goma tapa los trazos de otros), y solo puede borrar los suyos. Un trazo
+  sin `author` es de antes de las firmas y cuenta como del profesor.
+- **Voz:** la interfaz está quitada a propósito; la señalización sigue cableada
+  (`useVoiceChat` y el consumer) para poder volver como botón solo del profesor.
 
 ### Ejecución de Python — Pyodide en el navegador
 
