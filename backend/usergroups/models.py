@@ -1,12 +1,14 @@
 from django.db import models
 from users.models import User
 import secrets
-import string
 
-def generate_access_code(length=12):
-    """ Function to randomly generate a function's access code """
-    chars = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(chars) for _ in range(length))
+# Uppercase letters and digits, minus the characters that are easy to confuse
+# when a code is read out loud or copied off a screen: O/0, I/L/1.
+ACCESS_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+def generate_access_code(length=6):
+    """ Function to randomly generate a group's access code """
+    return ''.join(secrets.choice(ACCESS_CODE_ALPHABET) for _ in range(length))
 
 class Group(models.Model):
     owner = models.ForeignKey(User, on_delete=models.CASCADE)
