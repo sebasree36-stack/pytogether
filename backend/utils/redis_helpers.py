@@ -25,7 +25,10 @@ def voice_room_key(project_id):
     return f"voice_room:{project_id}"       # voice chat participants
 
 def user_profile_key(user_id):
-    return f"user_profile:{user_id}"        # email and color for that user
+    return f"user_profile:{user_id}"        # email and name for that user
+
+def room_colors_key(project_id):
+    return f"room_colors:{project_id}"      # user id -> index into settings.CLASS_COLORS, unique per room
 
 def persist_ydoc_to_db(project_id):
     """Saves the Yjs CRDT code from Redis to the PostgreSQL database."""

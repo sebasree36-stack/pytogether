@@ -1,7 +1,6 @@
 import json
 import base64
 import asyncio
-import random
 import y_py as Y
 from urllib.parse import parse_qs
 
@@ -13,7 +12,7 @@ from channels.db import database_sync_to_async
 from y_py import YDoc, apply_update
 
 from projects.models import Project
-from utils.redis_helpers import ydoc_key, active_set_key, voice_room_key, user_profile_key, ACTIVE_PROJECTS_SET, DIRTY_PROJECTS_SET, ASYNC_REDIS
+from utils.redis_helpers import ydoc_key, active_set_key, voice_room_key, user_profile_key, room_colors_key, ACTIVE_PROJECTS_SET, DIRTY_PROJECTS_SET, ASYNC_REDIS
 from utils.daily_logger import track_project_opened_async, track_max_room_async, track_max_active_rooms_async, track_ws_connection_async, track_user_async
 
 User = get_user_model()
@@ -38,8 +37,8 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
             await self.close(code=4001)
             return
 
-        is_member = await self._validate_membership(self.user, self.group_id, self.project_id)
-        print(self.group_id, self.project_id, self.user.email, "is_member:", is_member)
+        is_member, self.is_teacher = await self._validate_membership(self.user, self.group_id, self.project_id)
+        print(self.group_id, self.project_id, self.user.email, "is_member:", is_member, "teacher:", self.is_teacher)
         if not is_member:
 
             query_string = self.scope['query_string'].decode()
@@ -66,24 +65,21 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
         await ASYNC_REDIS.expire(active_set_key(self.project_id), 60)
         await ASYNC_REDIS.sadd(ACTIVE_PROJECTS_SET, str(self.project_id))
 
-        # Create the user profile in the redis cache if not exists
-        if not await ASYNC_REDIS.exists(user_profile_key(str(self.user.pk))):
-                color = random.choice(settings.USER_COLORS)
-                await ASYNC_REDIS.hset(user_profile_key(str(self.user.pk)), mapping={
-                    "email": self.user.email,
-                    "color": color["color"],
-                    "colorLight": color["light"]
-                })
-                # Set it to expire after 24 hours
-                await ASYNC_REDIS.expire(user_profile_key(str(self.user.pk)), 86400)
+        # The name is what everyone sees and it can change between sessions,
+        # so it is rewritten on every connect rather than cached once.
+        await ASYNC_REDIS.hset(user_profile_key(str(self.user.pk)), mapping={
+            "email": self.user.email,
+            "name": self.user.name,
+        })
+        await ASYNC_REDIS.expire(user_profile_key(str(self.user.pk)), 86400)
 
-        # Refreshed on every connect, unlike the colour: the name is what everyone
-        # sees, it can change, and profiles cached before it existed lack it.
-        await ASYNC_REDIS.hset(user_profile_key(str(self.user.pk)), "name", self.user.name)
+        self.color = await self._claim_room_color()
 
-        # notify others if this is their first tab opening
+        # Always, not only on the first tab: a second tab or a quick reload
+        # needs the user list too, since that message is what tells a client
+        # its own name and colour.
+        await self.channel_layer.group_send(self.room, {"type": "users_changed"})
         if current_connections == 1:
-            await self.channel_layer.group_send(self.room, {"type": "users_changed"})
             await track_ws_connection_async(True)
             
         room_users = await ASYNC_REDIS.hlen(active_set_key(self.project_id))
@@ -135,6 +131,8 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
                 if remaining_connections <= 0:
                     # Clean them out of the hash entirely
                     await ASYNC_REDIS.hdel(active_set_key(self.project_id), str(self.user.pk))
+                    # Hand the colour back so the next student can wear it
+                    await ASYNC_REDIS.hdel(room_colors_key(self.project_id), str(self.user.pk))
                     
                     await self.channel_layer.group_send(self.room, {"type": "users_changed"})
                     await self.channel_layer.group_send(
@@ -183,11 +181,12 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
                     continue 
 
                 email = _field(user_data, "email")
+                color = await self._color_of(uid)
                 active_users.append({
                     "id": str(uid),
                     "name": _field(user_data, "name") or email.split("@")[0],
-                    "color": _field(user_data, "color"),
-                    "colorLight": _field(user_data, "colorLight")
+                    "color": color,
+                    "colorLight": color + "33"
                 })
 
             await self.send_json({"type": "connection", "users": active_users})
@@ -244,7 +243,7 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
                 # Fetch everything from the local cache instead of DB
                 user_data = await ASYNC_REDIS.hgetall(user_profile_key(str(self.user.pk)))
                 
-                color = _field(user_data, "color") or "#30bced"
+                color = self.color
                 name = _field(user_data, "name") or self.user.name
 
                 await self.channel_layer.group_send(self.room, {
@@ -331,13 +330,15 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
 
     @database_sync_to_async
     def _validate_membership(self, user, group_id, project_id):
+        """Returns (is_member, is_teacher). The owner of the group is the teacher."""
         try:
             project = Project.objects.select_related("group").get(id=project_id)
         except Project.DoesNotExist:
-            return False
+            return False, False
         if project.group.id != group_id:
-            return False
-        return project.group.group_members.filter(id=user.id).exists()
+            return False, False
+        is_member = project.group.group_members.filter(id=user.id).exists()
+        return is_member, project.group.owner_id == user.id
 
     async def _apply_update_to_redis_ydoc(self, project_id, update_bytes: bytes):
         key = ydoc_key(project_id)
@@ -379,6 +380,45 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
 
         except Exception as e:
             print(f"Failed to acquire lock or write to Redis for project {project_id}: {e}")
+
+    async def _claim_room_color(self):
+        """Give this user a colour nobody else in the room is wearing.
+
+        The teacher sits outside the palette. Students take the lowest free
+        slot, under a lock so two joining at once cannot land on the same one.
+        Past twelve students colours start repeating, which beats failing.
+        """
+        if self.is_teacher:
+            return settings.TEACHER_COLOR
+
+        palette = settings.CLASS_COLORS
+        key = room_colors_key(self.project_id)
+        field = str(self.user.pk)
+
+        async with ASYNC_REDIS.lock(f"{key}:lock", timeout=5, blocking_timeout=5):
+            existing = await ASYNC_REDIS.hget(key, field)
+            if existing is not None:
+                # Another tab of this same user already holds a slot
+                await ASYNC_REDIS.expire(key, 86400)
+                return palette[int(existing) % len(palette)]
+
+            taken = {int(v) for v in (await ASYNC_REDIS.hvals(key))}
+            slot = next(
+                (i for i in range(len(palette)) if i not in taken),
+                len(taken) % len(palette),
+            )
+            await ASYNC_REDIS.hset(key, field, slot)
+            await ASYNC_REDIS.expire(key, 86400)
+
+        return palette[slot]
+
+    async def _color_of(self, user_id):
+        """The colour another user is wearing in this room."""
+        slot = await ASYNC_REDIS.hget(room_colors_key(self.project_id), str(user_id))
+        if slot is None:
+            # No slot means the teacher, who never takes one
+            return settings.TEACHER_COLOR
+        return settings.CLASS_COLORS[int(slot) % len(settings.CLASS_COLORS)]
 
     async def _heartbeat_loop(self):
         try:
