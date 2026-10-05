@@ -32,6 +32,9 @@ export default function GroupsAndProjectsPage() {
     const [showAccessCodeModal, setShowAccessCodeModal] = useState(null);
     const [showFeedbackModal, setShowFeedbackModal] = useState(false);
     const [showConfirmModal, setShowConfirmModal] = useState({ show: false, type: '', data: null });
+    // Refusals from the server used to die in console.error, leaving the button
+    // looking broken. Anything the server explains goes on screen instead.
+    const [actionError, setActionError] = useState("");
     const [newGroupName, setNewGroupName] = useState("");
     const [editGroupName, setEditGroupName] = useState("");
     const [accessCode, setAccessCode] = useState("");
@@ -51,6 +54,18 @@ export default function GroupsAndProjectsPage() {
     const { instance } = useMsal();
 
     document.title = 'PyTogether';
+
+    // Prefer what the server said over a generic line: it is the only place
+    // that knows why an action was refused.
+    const showActionError = (err, fallback) => {
+        setActionError(err?.response?.data?.error || fallback);
+    };
+
+    useEffect(() => {
+        if (!actionError) return;
+        const timer = setTimeout(() => setActionError(""), 8000);
+        return () => clearTimeout(timer);
+    }, [actionError]);
 
     const handleLogout = async () => {
         try {
@@ -169,6 +184,7 @@ export default function GroupsAndProjectsPage() {
             setShowCreateGroupModal(false);
         } catch (err) {
             console.error(err);
+            showActionError(err, "Could not create the group.");
         } finally {
             setIsCreating(false);
         }
@@ -199,6 +215,8 @@ export default function GroupsAndProjectsPage() {
             setShowConfirmModal({ show: false, type: '', data: null });
         } catch (err) {
             console.error(err);
+            setShowConfirmModal({ show: false, type: '', data: null });
+            showActionError(err, "Could not leave this group.");
         }
     };
 
@@ -213,6 +231,7 @@ export default function GroupsAndProjectsPage() {
             setShowEditGroupModal(null);
         } catch (err) {
             console.error(err);
+            showActionError(err, "Could not rename this group.");
         } finally {
             setIsCreating(false);
         }
@@ -232,6 +251,7 @@ export default function GroupsAndProjectsPage() {
             setShowCreateProjectModal(false);
         } catch (err) {
             console.error(err);
+            showActionError(err, "Could not create the project.");
         } finally {
             setIsCreating(false);
         }
@@ -248,6 +268,7 @@ export default function GroupsAndProjectsPage() {
             setShowEditProjectModal(null);
         } catch (err) {
             console.error(err);
+            showActionError(err, "Could not rename this project.");
         }
     };
 
@@ -258,6 +279,7 @@ export default function GroupsAndProjectsPage() {
             setShowConfirmModal({ show: false, type: '', data: null });
         } catch (err) {
             console.error(err);
+            showActionError(err, "Could not delete this project.");
         }
     };
 
@@ -279,6 +301,22 @@ export default function GroupsAndProjectsPage() {
 
     return (
         <div className="min-h-screen bg-gray-900 text-gray-100 flex flex-col relative">
+            {/* Why an action was refused, straight from the server */}
+            {actionError && (
+                <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] max-w-md w-[calc(100%-2rem)]">
+                    <div className="flex items-start gap-3 bg-red-900/95 border border-red-500 text-red-50 rounded-lg px-4 py-3 shadow-xl">
+                        <span className="text-sm flex-1">{actionError}</span>
+                        <button
+                            onClick={() => setActionError("")}
+                            className="text-red-200 hover:text-white flex-shrink-0"
+                            title="Dismiss"
+                        >
+                            <X className="h-4 w-4" />
+                        </button>
+                    </div>
+                </div>
+            )}
+
             {/* Subtle grid overlay */}
             <div className="fixed inset-0 pointer-events-none z-0 bg-[linear-gradient(to_right,#4f4f4f15_1px,transparent_1px),linear-gradient(to_bottom,#4f4f4f15_1px,transparent_1px)] bg-[size:24px_24px]"></div>
 

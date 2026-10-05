@@ -80,6 +80,19 @@ def leave_group(request):
 
     if serializer.is_valid():
         group = serializer.get_group()
+
+        # The owner is the teacher, and only the owner can manage the class.
+        # Walking out on members still in it would strand them with a class
+        # nobody can rename or add projects to. Leaving last is still allowed,
+        # since that deletes the group and is the only way to close one.
+        if group.owner_id == request.user.id and group.group_members.count() > 1:
+            return Response(
+                {"error": "You are the teacher of this class, so you cannot leave "
+                          "it while others are still in it. The class closes on "
+                          "its own once everyone else has left."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         group.group_members.remove(request.user)
 
         if group.group_members.count() == 0:
