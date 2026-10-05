@@ -4,7 +4,7 @@ import { jwtDecode } from "jwt-decode";
 import { saveAs } from 'file-saver';
 import { jsPDF } from "jspdf";
 import { Document, Packer, Paragraph, TextRun } from 'docx';
-import { Send, Check, X, Edit2, Pencil, Highlighter, Eraser, Eye, EyeOff, Trash2, Phone, PhoneOff, Mic, MicOff, Wifi, Share2, RotateCcw, RotateCw } from "lucide-react";
+import { Send, Check, X, Edit2, Pencil, Highlighter, Eraser, Eye, EyeOff, Trash2, Wifi, Share2, RotateCcw, RotateCw } from "lucide-react";
 import Anser from "anser";
 
 // CodeMirror
@@ -793,27 +793,11 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
     </div>
   );
 
-  const voiceSlot = (
-    <div className="flex items-center space-x-2">
-      {!voice.inVoiceCall ? (
-        <button onClick={voice.joinCall} className="flex items-center space-x-2 px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-colors duration-200">
-          <Phone className="h-4 w-4 text-white" /> <span className="text-sm text-white">Voice Chat</span>
-        </button>
-      ) : (
-        <div className="flex items-center space-x-2">
-          <button onClick={voice.toggleMute} className={`p-2 rounded-lg transition-colors duration-200 ${voice.isMuted ? 'bg-red-600 hover:bg-red-700' : 'bg-gray-700 hover:bg-gray-600'}`}>
-            {voice.isMuted ? <MicOff className="h-4 w-4 text-white" /> : <Mic className="h-4 w-4 text-white" />}
-          </button>
-          <button onClick={voice.leaveCall} className="flex items-center space-x-2 px-3 py-2 bg-red-600 hover:bg-red-700 rounded-lg transition-colors duration-200">
-            <PhoneOff className="h-4 w-4 text-white" /> <span className="text-sm text-white">Leave</span>
-          </button>
-          {voice.participants.length > 0 && (
-            <div className="flex items-center space-x-1 text-gray-400"><Phone className="h-3 w-3" /><span className="text-xs">{voice.participants.length}</span></div>
-          )}
-        </div>
-      )}
-    </div>
-  );
+  // The voice controls are deliberately not rendered. In a class of children
+  // the teacher is in the room already, and an open microphone between pupils
+  // is a problem to supervise rather than a feature. The signalling below and
+  // in the consumer is left wired up so it can come back as a teacher-only
+  // button without rebuilding it.
 
   const drawingSlot = (
     <div className="flex items-center space-x-1 p-1 bg-gray-700 rounded-lg">
@@ -865,7 +849,6 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
         plotContent={runner.plotSrc ? <img src={runner.plotSrc} alt="Plot" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', background: 'white' }} /> : null}
         onClearPlot={() => runner.setPlotSrc(null)}
         inputContent={inputSlot}
-        voiceControls={voiceSlot}
         drawingControls={drawingSlot}
 
         onBack={() => {
