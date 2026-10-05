@@ -327,7 +327,7 @@ const GroupItem = ({
                 <div className="flex items-center justify-center h-7 w-7 bg-blue-600 rounded-full flex-shrink-0">
                   <User className="h-4 w-4 text-white" />
                 </div>
-                <span className="text-xs md:text-sm text-gray-300 truncate">{member.email}</span>
+                <span className="text-xs md:text-sm text-gray-300 truncate">{member.name}</span>
               </li>
             ))}
           </ul>

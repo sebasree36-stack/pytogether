@@ -12,17 +12,21 @@ class GroupCreateSerializer(serializers.ModelSerializer):
         fields = ["group_name"]
 
 class GroupMemberSerializer(serializers.ModelSerializer):
+    name = serializers.ReadOnlyField()
+
     class Meta:
         model = User
-        fields = ["id", "email"]  # include any other fields
+        fields = ["id", "email", "name", "is_guest"]  # include any other fields
 
 class GroupDetailSerializer(serializers.ModelSerializer):
-    owner = serializers.StringRelatedField()
+    # Name rather than __str__, which is the email
+    owner = serializers.ReadOnlyField(source="owner.name")
+    owner_id = serializers.ReadOnlyField(source="owner.id")
     group_members = GroupMemberSerializer(many=True, read_only=True)
 
     class Meta:
         model = Group
-        fields = ["id", "group_name", "access_code", "owner", "group_members"]
+        fields = ["id", "group_name", "access_code", "owner", "owner_id", "group_members"]
 
 class GroupJoinSerializer(serializers.Serializer):
     access_code = serializers.CharField()

@@ -376,7 +376,7 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
               const me = data.users.find(u => u.id === myUserId);
               if (me) awareness.setLocalStateField("user", {
                 id: me.id,
-                name: me.email ? me.email.split('@')[0] : 'Guest',
+                name: me.name || 'Invitado',
                 color: me.color,
                 colorLight: me.colorLight
               });
@@ -758,20 +758,20 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
         <div className="text-gray-500 italic text-xs">No messages yet.</div>
       ) : (
         chatMessages.map(msg => {
-          let displayEmail = msg.user_email || msg.userEmail || msg.email;
+          let userName = msg.user_name;
 
-          if (!displayEmail && connectedUsers.length > 0) {
+          if (!userName && connectedUsers.length > 0) {
             const uid = msg.user_id || msg.userId;
             const foundUser = connectedUsers.find(u => u.id == uid);
-            if (foundUser) displayEmail = foundUser.email;
+            if (foundUser) userName = foundUser.name;
           }
 
-          const displayName = msg.isMe ? 'You' : (displayEmail ? displayEmail.split('@')[0] : 'Anon');
+          const displayName = msg.isMe ? 'You' : (userName || 'Anon');
 
           return (
             <div key={`${msg.timestamp.getTime()}-${msg.user_id || msg.userId}`} className="flex flex-col space-y-1">
               <div className="flex items-baseline space-x-2">
-                <span className="text-xs font-semibold truncate max-w-[120px]" style={{ color: msg.color }} title={displayEmail}>
+                <span className="text-xs font-semibold truncate max-w-[120px]" style={{ color: msg.color }} title={userName}>
                   {displayName}
                 </span>
                 <span className="text-xs text-gray-500">{msg.timestamp.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' })}</span>

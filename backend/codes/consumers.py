@@ -18,6 +18,12 @@ from utils.daily_logger import track_project_opened_async, track_max_room_async,
 
 User = get_user_model()
 
+def _field(user_data, key, default=""):
+    """Read one field out of a redis hash. Profiles cached before a field
+    existed simply come back without it, so never assume the key is there."""
+    value = user_data.get(key.encode())
+    return value.decode("utf-8") if value else default
+
 class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
 
     async def connect(self):
@@ -70,6 +76,10 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
                 })
                 # Set it to expire after 24 hours
                 await ASYNC_REDIS.expire(user_profile_key(str(self.user.pk)), 86400)
+
+        # Refreshed on every connect, unlike the colour: the name is what everyone
+        # sees, it can change, and profiles cached before it existed lack it.
+        await ASYNC_REDIS.hset(user_profile_key(str(self.user.pk)), "name", self.user.name)
 
         # notify others if this is their first tab opening
         if current_connections == 1:
@@ -172,11 +182,13 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
                 if not user_data:
                     continue 
 
+                email = _field(user_data, "email")
                 active_users.append({
                     "id": str(uid),
-                    "email": user_data[b'email'].decode('utf-8'),
-                    "color": user_data[b'color'].decode('utf-8'),
-                    "colorLight": user_data[b'colorLight'].decode('utf-8')
+                    "email": email,
+                    "name": _field(user_data, "name") or email.split("@")[0],
+                    "color": _field(user_data, "color"),
+                    "colorLight": _field(user_data, "colorLight")
                 })
 
             await self.send_json({"type": "connection", "users": active_users})
@@ -233,18 +245,16 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
                 # Fetch everything from the local cache instead of DB
                 user_data = await ASYNC_REDIS.hgetall(user_profile_key(str(self.user.pk)))
                 
-                if user_data:
-                    email = user_data[b'email'].decode('utf-8')
-                    color = user_data[b'color'].decode('utf-8')
-                else:
-                    email = "Unknown"
-                    color = "#30bced"
+                email = _field(user_data, "email") or "Unknown"
+                color = _field(user_data, "color") or "#30bced"
+                name = _field(user_data, "name") or self.user.name
 
                 await self.channel_layer.group_send(self.room, {
                     "type": "broadcast.chat_message",
                     "message": message,
                     "user_id": str(self.user.pk),
                     "user_email": email,
+                    "user_name": name,
                     "color": color,
                     "timestamp": asyncio.get_event_loop().time()
                 })
@@ -289,6 +299,7 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
             "message": event["message"],
             "user_id": event["user_id"],
             "user_email": event["user_email"],
+            "user_name": event["user_name"],
             "color": event["color"],
             "timestamp": event["timestamp"]
         })

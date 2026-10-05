@@ -262,9 +262,9 @@ export default function CodeLayout({
                       key={u.id}
                       className="inline-flex h-6 w-6 md:h-8 md:w-8 items-center justify-center rounded-full ring-2 ring-gray-800 text-xs font-bold text-gray-900"
                       style={{ backgroundColor: u.color || '#888' }}
-                      title={u.email}
+                      title={u.name}
                     >
-                      {u.email ? u.email[0].toUpperCase() : '?'}
+                      {u.name ? u.name[0].toUpperCase() : '?'}
                     </div>
                   ))}
                 </div>

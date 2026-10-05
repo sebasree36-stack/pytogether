@@ -13,9 +13,11 @@ class RegisterSerializer(serializers.ModelSerializer):
         return User.objects.create_user(**validated_data)
 
 class UserSerializer(serializers.ModelSerializer):
+    name = serializers.ReadOnlyField()
+
     class Meta:
         model = User
-        fields = ("id", "email", "date_joined")
+        fields = ("id", "email", "name", "is_guest", "date_joined")
 
 class FeedbackSerializer(serializers.ModelSerializer):
     class Meta:

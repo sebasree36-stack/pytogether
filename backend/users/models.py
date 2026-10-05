@@ -27,10 +27,23 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_staff  = models.BooleanField(default=False)
     date_joined = models.DateTimeField(auto_now_add=True)
 
+    # What other people in a room see. Guests type this in when they join;
+    # regular accounts leave it blank and fall back to their email's local part.
+    display_name = models.CharField(max_length=50, blank=True)
+
+    # Guests sign in through /unirse with a name and a class code. They get a
+    # synthetic email that is never shown to anyone.
+    is_guest = models.BooleanField(default=False)
+
     objects = UserManager()
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = []
+
+    @property
+    def name(self):
+        """The only identity that should ever reach another user's screen."""
+        return self.display_name or self.email.split("@")[0]
 
     def __str__(self):
         return self.email
