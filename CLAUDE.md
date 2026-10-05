@@ -69,8 +69,7 @@ Hacia el cliente, además: `permissions` (al conectar y cada vez que el profesor
 Flujo del estado del código:
 1. El cliente manda un delta Yjs en base64 (`update_b64`).
 2. El servidor toma un **lock de Redis** por proyecto, aplica el delta al `YDoc` guardado en Redis
-   (`project_ydoc:<id>`), re-serializa y lo guarda. Un delta corrupto provoca `force_disconnect`
-   para que ese cliente resincronice.
+   (`project_ydoc:<id>`), re-serializa y lo guarda.
 3. **Valida el delta contra los permisos de quien lo manda** (`_refusal_reason`): compara el
    documento antes y después para ver si tocó el código, la pizarra o ambos, y comprueba la forma y
    la firma de cada trazo nuevo. Si lo rechaza, marca la conexión y la cierra con el código **4010**
@@ -130,7 +129,9 @@ Pensado para que un niño entre sin tener correo y para que el profesor controle
 - **Entrada del alumno:** el profesor reparte `/unirse?codigo=XXXXXX`. El niño escribe su nombre y
   `POST /api/join-class/` le crea una cuenta de invitado (`is_guest`) con un correo sintético en
   `guest.invalid` que nunca se muestra. Los nombres repetidos se numeran ("Juan 2") contra todos los
-  invitados que entraron a ese grupo **ese día**, bajo lock de la fila del grupo.
+  invitados que entraron a ese grupo **ese día**, bajo lock de la fila del grupo. "Ese día" es el
+  día natural en `TIME_ZONE` (`America/Mexico_City`): en UTC el corte caería a las 18:00 locales,
+  en mitad de una clase, y reiniciaría la cuenta a medias.
 - **Permisos:** `ClassPermission(group, user, can_code, can_draw, can_chat)`. Sin fila, una cuenta
   normal puede todo y un invitado nada, así que una fila que falte nunca da permisos de más. El
   dueño (el profesor) nunca está restringido. `usergroups.models.permissions_for()` es la única
@@ -144,6 +145,31 @@ Pensado para que un niño entre sin tener correo y para que el profesor controle
   sin `author` es de antes de las firmas y cuenta como del profesor.
 - **Voz:** la interfaz está quitada a propósito; la señalización sigue cableada
   (`useVoiceChat` y el consumer) para poder volver como botón solo del profesor.
+
+### Pruebas del modo clase
+
+```bash
+npm run dev                 # en otra terminal; espera a que el backend responda
+npm run test:integration    # node tests/integration/run.mjs
+```
+
+25 comprobaciones contra el stack real (HTTP + WebSocket, nada simulado), porque casi todas las
+reglas viven en el consumer y no en funciones que se puedan llamar por separado:
+
+- `tests/integration/permissions.test.mjs` — con qué permisos llega un invitado, qué rechaza el
+  servidor, que un rechazo cierra **solo** esa conexión, y que un cambio del profesor llega a una
+  sala ya abierta.
+- `tests/integration/whiteboard.test.mjs` — firmas de los trazos, borrar solo lo propio, nada de
+  goma para los alumnos, y los trazos sin autor como del profesor.
+
+Detalles prácticos:
+- Usa `test1@gmail.com` como profesor y se monta su propia clase `__integration__`, que **borra al
+  terminar**, pase o falle (y si matas la ejecución a medias, la siguiente limpia los restos).
+- `ws` y `yjs` se toman de `frontend/reactapp/node_modules`: son los mismos que usa el navegador, y
+  una segunda copia sería una oportunidad más de probar la versión equivocada.
+- Para la siembra que la API no permite (un trazo sin firma, de antes de que existieran) llama a
+  `manage.py shell` dentro del contenedor, así que necesita Docker en marcha, no solo el backend.
+- Sale con código 1 si algo falla, para poder colgarlo de CI.
 
 ### Ejecución de Python — Pyodide en el navegador
 
@@ -200,13 +226,15 @@ Plantillas de código inicial (`NONE_TEMPLATE`, `PYTEST_TEMPLATE`, `PLT_TEMPLATE
   poder renovarlo. Si se auto-hospeda sin HTTPS, hay que corregir esas dos líneas o poner un proxy
   con TLS delante.
 - `backend/codes/views.py` está vacío a propósito: todo lo de código va por WebSocket.
-- Límite de tamaño de documento: `MAX_MESSAGE_SIZE` ≈ 70 KB (`base.py`). Updates o snapshots más
-  grandes se descartan silenciosamente (solo con `print`).
+- Límite de tamaño de documento: `MAX_MESSAGE_SIZE` ≈ 70 KB (`base.py`). Un update que haría
+  pasarse de ahí se **rechaza** (el cliente se entera y resincroniza); los snapshots a PostgreSQL
+  que se pasan sí se descartan silenciosamente, solo con `print`.
 - El throttling de DRF (`100/minute` por usuario) puede molestar en un salón con muchos alumnos;
   se ajusta en `REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"]` en `base.py`.
 - En `dev.py` los permisos de DRF se abren a `AllowAny` globalmente, pero cada vista declara
   `@permission_classes` explícitamente, así que siguen protegidas.
-- No hay suite de tests real: los `tests.py` de las apps están vacíos.
+- Los `tests.py` de las apps de Django siguen vacíos. Lo que sí hay son **pruebas de integración**
+  del modo clase en `tests/integration/`, descritas en "Pruebas del modo clase".
 
 ## Comandos útiles
 
@@ -226,4 +254,7 @@ docker compose -f docker-compose-dev.yaml down -v
 
 # Lint del frontend
 npm run lint --prefix frontend/reactapp
+
+# Pruebas de integración del modo clase (necesita el stack levantado)
+npm run test:integration
 ```
