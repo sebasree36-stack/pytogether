@@ -1,6 +1,7 @@
 import json
 import base64
 import asyncio
+import math
 import y_py as Y
 from urllib.parse import parse_qs
 
@@ -18,6 +19,55 @@ from utils.redis_helpers import ydoc_key, active_set_key, voice_room_key, user_p
 from utils.daily_logger import track_project_opened_async, track_max_room_async, track_max_active_rooms_async, track_ws_connection_async, track_user_async
 
 User = get_user_model()
+
+# What the whiteboard is allowed to hold. The server is the only thing between
+# one pupil's browser console and everybody else's screen, so a stroke that does
+# not fit this shape is refused rather than stored and handed on.
+STROKE_TYPES = {"draw", "highlight", "erase"}
+STROKE_KEYS = {"type", "color", "width", "points", "_liveId"}
+MAX_STROKES = 500
+MAX_POINTS_PER_STROKE = 2000
+
+
+def _is_number(value):
+    """A real number. bool is an int in Python, which here it must not be."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _stroke_problem(stroke):
+    """Why this stroke cannot be stored, or None when it is fine."""
+    if not isinstance(stroke, dict):
+        return "a stroke is not an object"
+
+    unexpected = set(stroke) - STROKE_KEYS
+    if unexpected:
+        return f"a stroke carries unexpected keys: {sorted(unexpected)}"
+
+    if stroke.get("type") not in STROKE_TYPES:
+        return "a stroke has an unknown type"
+
+    if not isinstance(stroke.get("color"), str) or len(stroke["color"]) > 32:
+        return "a stroke colour is not a short string"
+
+    if not _is_number(stroke.get("width")) or not 0 < stroke["width"] <= 64:
+        return "a stroke width is out of range"
+
+    points = stroke.get("points")
+    if not isinstance(points, list) or not 0 < len(points) <= MAX_POINTS_PER_STROKE:
+        return "a stroke has too few or too many points"
+
+    for point in points:
+        if not isinstance(point, dict) or set(point) != {"x", "y"}:
+            return "a point is not an {x, y} pair"
+        if not _is_number(point["x"]) or not _is_number(point["y"]):
+            return "a coordinate is not a finite number"
+
+    live_id = stroke.get("_liveId")
+    if live_id is not None and (not isinstance(live_id, str) or len(live_id) > 64):
+        return "a live stroke id is not a short string"
+
+    return None
+
 
 def _field(user_data, key, default=""):
     """Read one field out of a redis hash. Profiles cached before a field
@@ -37,6 +87,11 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
         # in the gap after accept() is refused rather than crashing on a
         # missing attribute.
         self.permissions = {"can_code": False, "can_draw": False, "can_chat": False}
+
+        # Set once this connection sends something the server will not take.
+        # From then on its messages are dropped rather than applied on top of a
+        # document it and the server no longer agree about.
+        self.poisoned = False
 
         self.user = self.scope.get("user")
 
@@ -230,7 +285,7 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
             print(f"Error in users_changed: {e}")
 
     async def receive(self, text_data=None, bytes_data=None):
-        if not text_data:
+        if self.poisoned or not text_data:
             return
 
         if len(text_data.encode()) > settings.MAX_MESSAGE_SIZE:
@@ -247,8 +302,18 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
             if mtype == "update":
                 update_b64 = msg.get("update_b64")
                 if not update_b64: return
-                update_bytes = base64.b64decode(update_b64)
-                await self._apply_update_to_redis_ydoc(self.project_id, update_bytes)
+
+                try:
+                    update_bytes = base64.b64decode(update_b64, validate=True)
+                except Exception:
+                    await self._reject_update("the update was not valid base64")
+                    return
+
+                # Only hand it on once the server has taken it: a delta the
+                # server refused used to still reach every other screen.
+                if not await self._apply_update_to_redis_ydoc(self.project_id, update_bytes):
+                    return
+
                 await self.channel_layer.group_send(self.room, {
                     "type": "broadcast.update",
                     "update_b64": update_b64,
@@ -381,10 +446,17 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
         return is_member, project.group.owner_id == user.id
 
     async def _apply_update_to_redis_ydoc(self, project_id, update_bytes: bytes):
+        """Take this delta into the stored document, or refuse it.
+
+        Returns True when the update was accepted and may be handed on to the
+        rest of the room. Every refusal boots this one connection so that it
+        resyncs, because once the server declines a change the client already
+        applied locally, the two documents have drifted apart and nothing short
+        of a reload brings them back together.
+        """
         key = ydoc_key(project_id)
         lock_key = f"{key}:lock"
 
-        # Acquire a Redis lock specific to this project
         try:
             async with ASYNC_REDIS.lock(lock_key, timeout=5, blocking_timeout=5):
                 cur = await ASYNC_REDIS.get(key)
@@ -392,34 +464,91 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
 
                 try:
                     # Apply base state
-                    if cur: 
+                    if cur:
                         apply_update(ydoc, cur)
+
+                    before = self._snapshot(ydoc)
+
                     # Apply new delta
                     apply_update(ydoc, update_bytes)
 
                 except Exception as e:
                     print(f"Poison update rejected for project {project_id}: {e}")
-                    # Boot the offending user so they resync from the healthy Redis state
-                    await self.channel_layer.group_send(
-                        self.room,
-                        {"type": "force_disconnect"}
-                    )
-                    return
-                
+                    await self._reject_update("the update could not be read")
+                    return False
+
+                refusal = self._refusal_reason(before, self._snapshot(ydoc))
+                if refusal:
+                    await self._reject_update(refusal)
+                    return False
+
                 new_bytes = Y.encode_state_as_update(ydoc)
 
                 if len(new_bytes) > settings.MAX_MESSAGE_SIZE:
-                    print(f"Skipping update for project {project_id}: size exceeds limit")
-                    return
-                
+                    # Dropping this silently used to leave the client holding
+                    # work the server had thrown away, with no sign of it.
+                    await self._reject_update("the project has reached its size limit")
+                    return False
+
                 # Atomically save the perfectly merged state back to Redis
                 await ASYNC_REDIS.set(key, new_bytes)
 
                 # Mark as dirty so celery picks up
                 await ASYNC_REDIS.sadd(DIRTY_PROJECTS_SET, str(project_id))
 
+                return True
+
         except Exception as e:
             print(f"Failed to acquire lock or write to Redis for project {project_id}: {e}")
+            return False
+
+    def _snapshot(self, ydoc):
+        """The two things a client is allowed to change, as comparable values.
+
+        The drawings stay a JSON string so that "did this update touch the
+        board at all?" is a string comparison, and parsing only happens for the
+        updates that actually did.
+        """
+        return {
+            "code": str(ydoc.get_text("codetext")),
+            "drawings": ydoc.get_array("drawings").to_json(),
+        }
+
+    def _refusal_reason(self, before, after):
+        """Why this user may not make this change, or None when they may."""
+        if after["code"] != before["code"] and not self.permissions["can_code"]:
+            return "you cannot change the code right now"
+
+        if after["drawings"] != before["drawings"]:
+            if not self.permissions["can_draw"]:
+                return "you cannot draw right now"
+
+            strokes = json.loads(after["drawings"])
+            if len(strokes) > MAX_STROKES:
+                return "there are too many strokes on the board"
+
+            # Only what this update added needs checking. Whatever was already
+            # stored was checked on the way in.
+            was_there = set(json.dumps(s, sort_keys=True) for s in json.loads(before["drawings"]))
+            for stroke in strokes:
+                if json.dumps(stroke, sort_keys=True) in was_there:
+                    continue
+                problem = _stroke_problem(stroke)
+                if problem:
+                    return problem
+
+        return None
+
+    async def _reject_update(self, reason):
+        """Refuse everything further from this connection and have it resync.
+
+        Only this socket is closed. Sending force_disconnect to the room used to
+        take the whole class down over one pupil's bad delta.
+        """
+        self.poisoned = True
+        print(f"Refused an update from {self.user.email} in project {self.project_id}: {reason}")
+        await self.send_json({"type": "refused", "action": "update", "reason": reason})
+        await self.close(code=4010)
 
     async def _claim_room_color(self):
         """Give this user a colour nobody else in the room is wearing.
@@ -472,29 +601,45 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
             return
     
     async def _get_or_create_ydoc_bytes(self):
-        """Fetches the YDoc from Redis, or initializes it securely from the DB."""
+        """Fetch the YDoc from Redis, or initialise it securely from the DB.
+
+        Creating it happens under the project's lock, re-checking inside. A
+        class told to open the same project at once used to race here: several
+        connections each built their own document from the same text, each with
+        its own client id, the last write won, and everyone whose version lost
+        was left editing a document the server had never seen. Their keystrokes
+        then vanished without a word, because their updates named items that
+        did not exist in the stored document.
+        """
         ydoc_bytes = await ASYNC_REDIS.get(ydoc_key(self.project_id))
-        
+
         if ydoc_bytes:
             return ydoc_bytes
-            
-        # Redis is empty. Fetch the raw text from the database
-        code_obj = await database_sync_to_async(lambda: getattr(Project.objects.get(id=self.project_id), "code", None))()
-        text = code_obj.content if code_obj else ""
-        
-        # Initialize a brand new Yjs Document on the server
-        new_ydoc = YDoc()
-        ytext = new_ydoc.get_text('codetext')
-        
-        # Safely insert the database text into the server's CRDT
-        with new_ydoc.begin_transaction() as txn:
-            ytext.extend(txn, text)
-            
-        # Convert to binary update
-        new_bytes = Y.encode_state_as_update(new_ydoc)
-        
-        # Save to Redis immediately so it is permanently synchronized
-        await ASYNC_REDIS.set(ydoc_key(self.project_id), new_bytes)
+
+        key = ydoc_key(self.project_id)
+        async with ASYNC_REDIS.lock(f"{key}:lock", timeout=5, blocking_timeout=5):
+            # Somebody else may have created it while we waited for the lock
+            ydoc_bytes = await ASYNC_REDIS.get(key)
+            if ydoc_bytes:
+                return ydoc_bytes
+
+            # Redis is empty. Fetch the raw text from the database
+            code_obj = await database_sync_to_async(lambda: getattr(Project.objects.get(id=self.project_id), "code", None))()
+            text = code_obj.content if code_obj else ""
+
+            # Initialize a brand new Yjs Document on the server
+            new_ydoc = YDoc()
+            ytext = new_ydoc.get_text('codetext')
+
+            # Safely insert the database text into the server's CRDT
+            with new_ydoc.begin_transaction() as txn:
+                ytext.extend(txn, text)
+
+            # Convert to binary update
+            new_bytes = Y.encode_state_as_update(new_ydoc)
+
+            # Save to Redis immediately so it is permanently synchronized
+            await ASYNC_REDIS.set(key, new_bytes)
 
         await track_project_opened_async()   # tracking first opening
 

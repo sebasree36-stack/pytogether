@@ -439,7 +439,20 @@ export default function PyIDE({ groupId: propGroupId, projectId: propProjectId, 
     ws.onclose = (event) => {
       console.log('Disconnected. Code:', event.code);
       awareness.setLocalState(null);
-      if (event.code === 4000) {
+      if (event.code === 4010) {
+        // The server refused something this tab sent, so this document has
+        // drifted from the server's and only a reload brings them back
+        // together. Just this tab: the rest of the class keeps working.
+        const lastResync = Number(sessionStorage.getItem('resyncReloadAt') || 0);
+        if (Date.now() - lastResync > 15000) {
+          sessionStorage.setItem('resyncReloadAt', String(Date.now()));
+          window.location.reload();
+          return;
+        }
+        // Twice in a row means reloading is not fixing it, so stop and say so
+        // rather than putting the child's browser in a loop.
+        setEditorCrashed(true);
+      } else if (event.code === 4000) {
         window.dispatchEvent(new Event('backendDown'));
       } else if (event.code === 1006) {
         window.dispatchEvent(new Event('backendDown'));
