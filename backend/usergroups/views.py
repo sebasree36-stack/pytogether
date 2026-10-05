@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from .models import Group
 from .serializers import GroupCreateSerializer, GroupDetailSerializer, GroupJoinSerializer, GroupUpdateSerializer
+from utils.permissions import guest_forbidden, owner_required
 from datetime import timedelta
 from django.utils import timezone
 
@@ -11,6 +12,10 @@ from django.utils import timezone
 @permission_classes([IsAuthenticated])
 def create_group(request):
     """ View to create a group """
+
+    denied = guest_forbidden(request.user)
+    if denied:
+        return denied
 
     # Deserialize request
     serializer = GroupCreateSerializer(data=request.data)
@@ -33,6 +38,11 @@ def create_group(request):
 @permission_classes([IsAuthenticated])
 def join_group(request):
     """ View to join a group via acesss code """
+
+    # Guests are placed into their class by /unirse, not through this route
+    denied = guest_forbidden(request.user)
+    if denied:
+        return denied
 
     serializer = GroupJoinSerializer(data=request.data, context={'request': request})
 
@@ -88,6 +98,11 @@ def edit_group(request):
 
     if serializer.is_valid():
         group = serializer.get_group()
+
+        denied = owner_required(request.user, group)
+        if denied:
+            return denied
+
         group.group_name = serializer.validated_data["group_name"]
         group.save()
         return Response({"message": "Group updated successfully."}, status=status.HTTP_200_OK)

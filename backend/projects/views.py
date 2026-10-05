@@ -12,6 +12,7 @@ from usergroups.models import Group
 from codes.models import Code
 from .serializers import ProjectDetailSerializer, ProjectCreateSerializer, ProjectUpdateSerializer
 from utils.redis_helpers import active_set_key, SYNC_REDIS
+from utils.permissions import owner_required
 
 # Helper functions
 def get_group_or_error(group_id):
@@ -82,8 +83,9 @@ def create_project(request, group_id):
     if not group:
         return Response({"error": "Invalid group_id"}, status=400)
     
-    if not check_membership_or_error(request.user, group):
-        return Response({"error": "You are not in this group"}, status=403)
+    denied = owner_required(request.user, group)
+    if denied:
+        return denied
 
     serializer = ProjectCreateSerializer(data=request.data, context={"request": request})
     
@@ -102,8 +104,10 @@ def edit_project(request, group_id, project_id):
 
     if not group: return Response({"error": "Invalid group"}, status=400)
     if not project: return Response({"error": "Project not found"}, status=404)
-    if not check_membership_or_error(request.user, group):
-        return Response({"error": "Not authorized"}, status=403)
+
+    denied = owner_required(request.user, group)
+    if denied:
+        return denied
 
     serializer = ProjectUpdateSerializer(data=request.data, context={"request": request})
     if serializer.is_valid():
@@ -121,8 +125,10 @@ def delete_project(request, group_id, project_id):
     project = get_project_or_error(project_id)
 
     if not group or not project: return Response({"error": "Not found"}, status=404)
-    if not check_membership_or_error(request.user, group):
-        return Response({"error": "Not authorized"}, status=403)
+
+    denied = owner_required(request.user, group)
+    if denied:
+        return denied
 
     # make sure nobody is editing the project
     active_users = SYNC_REDIS.hlen(active_set_key(project.id))
@@ -148,10 +154,11 @@ def generate_share_link(request, group_id, project_id):
     """
     group = get_group_or_error(group_id)
     if not group: return Response({"error": "Group not found"}, status=404)
-    
-    if not check_membership_or_error(request.user, group):
-        return Response({"error": "Not authorized"}, status=403)
-            
+
+    denied = owner_required(request.user, group)
+    if denied:
+        return denied
+
     signer = signing.TimestampSigner()
     share_payload = {
         "pid": project_id,
@@ -212,8 +219,11 @@ def generate_snippet_link(request, group_id, project_id):
     Anyone can open this link (no login required).
     """
     group = get_group_or_error(group_id)
-    if not check_membership_or_error(request.user, group):
-        return Response({"error": "Not authorized"}, status=403)
+    if not group: return Response({"error": "Group not found"}, status=404)
+
+    denied = owner_required(request.user, group)
+    if denied:
+        return denied
 
     signer = signing.TimestampSigner()
     snippet_payload = {

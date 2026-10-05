@@ -16,7 +16,9 @@ class GroupMemberSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "email", "name", "is_guest"]  # include any other fields
+        # No email: a guest in the room must never be handed one, and nothing
+        # on screen needs it now that members are shown by name.
+        fields = ["id", "name", "is_guest"]
 
 class GroupDetailSerializer(serializers.ModelSerializer):
     # Name rather than __str__, which is the email

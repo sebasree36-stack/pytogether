@@ -185,7 +185,6 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
                 email = _field(user_data, "email")
                 active_users.append({
                     "id": str(uid),
-                    "email": email,
                     "name": _field(user_data, "name") or email.split("@")[0],
                     "color": _field(user_data, "color"),
                     "colorLight": _field(user_data, "colorLight")
@@ -245,7 +244,6 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
                 # Fetch everything from the local cache instead of DB
                 user_data = await ASYNC_REDIS.hgetall(user_profile_key(str(self.user.pk)))
                 
-                email = _field(user_data, "email") or "Unknown"
                 color = _field(user_data, "color") or "#30bced"
                 name = _field(user_data, "name") or self.user.name
 
@@ -253,7 +251,6 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
                     "type": "broadcast.chat_message",
                     "message": message,
                     "user_id": str(self.user.pk),
-                    "user_email": email,
                     "user_name": name,
                     "color": color,
                     "timestamp": asyncio.get_event_loop().time()
@@ -298,7 +295,6 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
             "type": "chat_message",
             "message": event["message"],
             "user_id": event["user_id"],
-            "user_email": event["user_email"],
             "user_name": event["user_name"],
             "color": event["color"],
             "timestamp": event["timestamp"]
@@ -325,8 +321,8 @@ class YjsCodeConsumer(AsyncJsonWebsocketConsumer):
                 user_data = await ASYNC_REDIS.hgetall(user_profile_key(uid))
                 if user_data:
                     voice_users.append({
-                        "id": uid, 
-                        "email": user_data[b'email'].decode('utf-8')
+                        "id": uid,
+                        "name": _field(user_data, "name") or _field(user_data, "email").split("@")[0]
                     })
                     
             await self.send_json({"type": "voice_room_update", "participants": voice_users})
