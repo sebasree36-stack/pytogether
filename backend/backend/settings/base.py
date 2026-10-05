@@ -168,7 +168,11 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+# Where the lessons happen. This is not cosmetic: guest names are numbered
+# against everyone who entered a class "that day", so on UTC a lesson running
+# past 18:00 local would straddle two days and two children called Juan could
+# both come out as "Juan". Timestamps stay UTC in the database, as USE_TZ says.
+TIME_ZONE = 'America/Mexico_City'
 
 USE_I18N = True
 
